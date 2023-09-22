@@ -8,8 +8,8 @@ Download DSWx data
 
 @author: km
 """
+from pystac_client import Client  
 from shapely import wkt
-import numpy as np
 import os
 from datetime import datetime
 from swampy import config
@@ -17,6 +17,13 @@ import json
 from urllib.request import urlopen
 import requests
 import concurrent.futures
+
+import geopandas as gpd
+from shapely.geometry import shape
+from matplotlib import pyplot as plt
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+
 
 nproc = int(os.cpu_count())
 
@@ -64,6 +71,8 @@ def searchDSWx(ps):
                      "max_items": 10000}
     search_dswx = api.search(**search_params)
     items = search_dswx.get_all_items()
+
+    plot_frames(list(search_dswx.items()),aoi)
 
     # Filter cloudy days
     print("Filtering cloudy days...")
@@ -120,6 +129,38 @@ def dlDSWx(urls,ps,outdir):
                 print('Warning: ' + fname + ' is too small. Try again.')
                 
 
+def plot_frames(dswx_data,aoi):
+    # Visualize the DSWx tile boundary and the user-defined bbox
+    geom_df = []
+    for d,_ in enumerate(dswx_data):
+        geom_df.append(shape(dswx_data[d].geometry))
+    geom_granules = gpd.GeoDataFrame({'geometry':geom_df})
+    
+    minlon = min(coord[0] for coord in aoi.__geo_interface__['coordinates'][0])
+    maxlon = max(coord[0] for coord in aoi.__geo_interface__['coordinates'][0])
+    minlat = min(coord[1] for coord in aoi.__geo_interface__['coordinates'][0])
+    maxlat = max(coord[1] for coord in aoi.__geo_interface__['coordinates'][0])
+    
+    # Set up the figure and axis with a chosen map projection (e.g., PlateCarree)
+    fig, ax = plt.subplots(figsize=(10, 10), subplot_kw={'projection': ccrs.PlateCarree()})
+    ax.set_extent([minlon, maxlon, minlat, maxlat])  # Set extent to fit around your data's bounding box
+    
+    # Add a basemap using cartopy features
+    ax.add_feature(cfeature.LAND, edgecolor='black', alpha=0.2)
+    ax.add_feature(cfeature.COASTLINE, edgecolor='black')
+    ax.add_feature(cfeature.BORDERS, linestyle=':')
+    ax.add_feature(cfeature.STATES, linestyle=':',linewidth=.3)
+    
+    # Plot the DSWx tile boundary polygons
+    geom_granules.boundary.plot(ax=ax, color='lightblue', linewidth=.5)
+    
+    # Plot the user-specified AOI polygon
+    aoi.boundary.plot(ax=ax, color='#8B0000', linewidth=1,linestyle='--')
+    
+    plt.title("DSWx Tile Boundary and User-specified AOI")
+    plt.show()
+    
+    
 def main():
 
     ps = config.getPS()
