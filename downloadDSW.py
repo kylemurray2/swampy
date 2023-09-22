@@ -34,7 +34,9 @@ import json
 # web imports
 from urllib.request import urlopen
 import requests
-ps = config.getPS()
+import concurrent.futures
+
+nproc = int(os.cpu_count())
 
 
 def filter_by_cloud_cover(item, threshold=10):
@@ -59,7 +61,7 @@ def return_granule(item):
     return item.assets['0_B01_WTR'].href
     
     
-def search(ps):
+def searchDSWx(ps):
 
     # convert to the datetime format
     start_date = datetime(int(ps.date_start[0:4]), int(ps.date_start[4:6]), int(ps.date_start[6:8]))    
@@ -71,6 +73,7 @@ def search(ps):
     
     # Search data through CMR-STAC API
     stac = 'https://cmr.earthdata.nasa.gov/cloudstac/'    # CMR-STAC API Endpoint
+    print("Connecting to API...")
     api = Client.open(f'{stac}/POCLOUD/')
     collections = ['OPERA_L3_DSWX-HLS_PROVISIONAL_V1']
     
@@ -81,24 +84,16 @@ def search(ps):
     search_dswx = api.search(**search_params)
     items = search_dswx.get_all_items()
 
-    all_items = list(items)
     # Filter cloudy days
+    print("Filtering cloudy days...")
     filtered_items = list(filter(filter_by_cloud_cover, items))
-    print(str(len(all_items)) + ' items were found.')
+    print(str(len(list(items))) + ' items were found.')
     print(str(len(filtered_items)) + ' items meet the cloud threshold')
-
-    
 
     filtered_urls = list(map(return_granule, filtered_items))
     print(len(filtered_urls))
     
-    
-    output_path = Path(ps.output_path)
-    if not output_path.exists():
-        output_path.mkdir(parents=True)
-
-
-
+    return filtered_urls
 
 
 def dl(url,outname):   
@@ -109,17 +104,18 @@ def dl(url,outname):
         # Iterate through the content and write to the file
         for data in response.iter_content(chunk_size=int(2**14)):
             file.write(data)
+
             
-def dlDSWx(): 
+def dlDSWx(urls,ps,outdir): 
 
     # Create a list of file path/names
     outNames = []
-    dlSLCs = []
-    for ii in range(len(gran)):
-        fname = os.path.join(outdir, gran[ii] + '.zip')
+    dl_list = []
+    for url in urls:
+        fname = os.path.join(outdir, url.split('/')[-1])
         if not os.path.isfile(fname):
-            outNames.append(os.path.join(outdir, gran[ii] + '.zip'))
-            dlSLCs.append(slcUrls[ii])
+            outNames.append(os.path.join(outdir, url.split('/')[-1]))
+            dl_list.append(url)
             
     if not os.path.isdir(outdir):
         os.mkdir(outdir)
@@ -127,16 +123,27 @@ def dlDSWx():
         
     print('Downloading the following files:')
     print(dl_list)
-    
+    print('downloading with '  + str(nproc) + ' cpus')
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=nproc) as executor:  # Adjust max_workers as needed
-        futures = [executor.submit(dl, url, outName) for url, outName in zip(dlSLCs, outNames)]
+        futures = [executor.submit(dl, url, outName) for url, outName in zip(dl_list, outNames)]
         concurrent.futures.wait(futures)
 
     # check the files
-    for ii in range(len(gran)):
-        fname = os.path.join(outdir, gran[ii] + '.zip')
+    for url in urls:
+        fname = os.path.join(outdir, url.split('/')[-1])
         if not os.path.isfile(fname):
             print('Warning: File does not exist ' + fname)
         else:
-            if os.path.getsize(fname) < 2**30: # If it's smaller than 1 Gb
+            if os.path.getsize(fname) < 2**10: # If it's smaller than 1 Kb
                 print('Warning: ' + fname + ' is too small. Try again.')
+                
+
+def main():
+
+    ps = config.getPS()
+
+    # Get the filtered list of urls
+    filtered_urls = searchDSWx(ps)
+    
+    dlDSWx(filtered_urls,ps,ps.outdir)
