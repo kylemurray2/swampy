@@ -9,35 +9,16 @@ Download DSWx data
 @author: km
 """
 from shapely import wkt
-
 import numpy as np
-from matplotlib import pyplot as plt
 import os
 from datetime import datetime
 from swampy import config
-# GIS imports
-import geopandas as gpd
-import rasterio
-from rasterio.merge import merge
-from rasterio.crs import CRS
-from rasterio.warp import transform_bounds, calculate_default_transform, reproject, Resampling
-from shapely import Polygon
-import fiona
-# misc imports
-from pystac_client import Client
-import numpy as np
-from collections import defaultdict
-from multiprocessing import Pool
-from pathlib import Path
-import os
 import json
-# web imports
 from urllib.request import urlopen
 import requests
 import concurrent.futures
 
 nproc = int(os.cpu_count())
-
 
 def filter_by_cloud_cover(item, threshold=10):
     '''
