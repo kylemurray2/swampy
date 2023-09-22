@@ -8,12 +8,13 @@ Download DSWx data
 
 @author: km
 """
+from shapely import wkt
 
 import numpy as np
 from matplotlib import pyplot as plt
 import os
 from datetime import datetime
-import config
+from swampy import config
 # GIS imports
 import geopandas as gpd
 import rasterio
@@ -22,7 +23,6 @@ from rasterio.crs import CRS
 from rasterio.warp import transform_bounds, calculate_default_transform, reproject, Resampling
 from shapely import Polygon
 import fiona
-
 # misc imports
 from pystac_client import Client
 import numpy as np
@@ -31,83 +31,75 @@ from multiprocessing import Pool
 from pathlib import Path
 import os
 import json
-
 # web imports
 from urllib.request import urlopen
-
-
+import requests
 ps = config.getPS()
 
 
-start_date = datetime(int(ps.date_start[0:4]), int(ps.date_start[4:6]), int(ps.date_start[6:8]))    
-stop_date = datetime(int(ps.date_stop[0:4]), int(ps.date_stop[4:6]), int(ps.date_stop[6:8]))  
+def filter_by_cloud_cover(item, threshold=10):
+    '''
+    Removes images with more than <threshold>% cloud cover.
+    '''
+    xml_url = item.assets['metadata'].href
+    response = urlopen(xml_url)
+    data_json = json.loads(response.read()) # the XML files are formatted as JSONs (?!), so we use a JSON reader
+
+    for item in data_json['AdditionalAttributes']:
+        if item['Name'] == 'PercentCloudCover':
+            break
+    c_cover = int(item['Values'][0])
+    if c_cover<=threshold:
+        return True
+    else:
+        return False
 
 
+def return_granule(item):
+    return item.assets['0_B01_WTR'].href
+    
+    
+def search(ps):
 
+    # convert to the datetime format
+    start_date = datetime(int(ps.date_start[0:4]), int(ps.date_start[4:6]), int(ps.date_start[6:8]))    
+    stop_date = datetime(int(ps.date_stop[0:4]), int(ps.date_stop[4:6]), int(ps.date_stop[6:8]))  
+            
+    # Convert the wkt polygon to a Shapely Polygon
+    aoi = wkt.loads(ps.polygon)
+    intersects_geometry = aoi.__geo_interface__
+    
+    # Search data through CMR-STAC API
+    stac = 'https://cmr.earthdata.nasa.gov/cloudstac/'    # CMR-STAC API Endpoint
+    api = Client.open(f'{stac}/POCLOUD/')
+    collections = ['OPERA_L3_DSWX-HLS_PROVISIONAL_V1']
+    
+    search_params = {"collections": collections,
+                     "intersects": intersects_geometry,
+                     "datetime": [start_date, stop_date],
+                     "max_items": 10000}
+    search_dswx = api.search(**search_params)
+    items = search_dswx.get_all_items()
 
-
-
-
-
-def search():
-    # URL of CMR service
-    STAC_URL = 'https://cmr.earthdata.nasa.gov/stac'
-    
-    # Setup PySTAC client
-    provider_cat = Client.open(STAC_URL)
-    catalog = Client.open(f'{STAC_URL}/POCLOUD/')
-    
-    # We would like to create mosaics for May 2023
-    date_range = "2023-05-01/2023-05-30"
-    
-    # Load the geometry for Australia to retrieve bounding boxes for our search
-    world = gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
-    australia_shape = world[world['name']=='Australia']
-    bbox = australia_shape.iloc[0].geometry.bounds
-    print(bbox)
-    
-    opts = {
-        'bbox' : bbox, 
-        'collections': ps.collections,
-        'datetime' : date_range,
-        # querying by cloud cover does not work (04/27/23)
-        # We will instead filter results by parsing the associated XML files for each granule
-        # 'query':{
-        #     'eo:cloud_cover':{
-        #         'lt': 10    
-        #     },
-        # }
-    }
-    
-    search = catalog.search(**opts)
-    items = search.get_all_items()
-    
-    def filter_by_cloud_cover(item, threshold=10):
-        xml_url = item.assets['metadata'].href
-        response = urlopen(xml_url)
-        data_json = json.loads(response.read()) # the XML files are formatted as JSONs (?!), so we use a JSON reader
-    
-        for item in data_json['AdditionalAttributes']:
-            if item['Name'] == 'PercentCloudCover':
-                break
-        c_cover = int(item['Values'][0])
-        if c_cover<=threshold:
-            return True
-        else:
-            return False
-    
+    all_items = list(items)
+    # Filter cloudy days
     filtered_items = list(filter(filter_by_cloud_cover, items))
-    print(len(filtered_items))
+    print(str(len(all_items)) + ' items were found.')
+    print(str(len(filtered_items)) + ' items meet the cloud threshold')
+
     
-    def return_granule(item):
-        return item.assets['0_B01_WTR'].href
+
     filtered_urls = list(map(return_granule, filtered_items))
     print(len(filtered_urls))
     
     
-    output_path = Path('../data/australia')
+    output_path = Path(ps.output_path)
     if not output_path.exists():
         output_path.mkdir(parents=True)
+
+
+
+
 
 def dl(url,outname):   
     response = requests.get(url,stream=True,allow_redirects=True)
