@@ -178,7 +178,14 @@ def plot_frames(dswx_data,aoi):
     ax.add_feature(cfeature.COASTLINE, edgecolor='black')
     ax.add_feature(cfeature.BORDERS, linestyle=':')
     ax.add_feature(cfeature.STATES, linestyle=':',linewidth=.3)
-    
+   
+    import cartopy.io.img_tiles as cimgt
+   
+    bg='World_Shaded_Relief'
+    zoomLevel = 12
+    url = 'https://server.arcgisonline.com/ArcGIS/rest/services/' + bg + '/MapServer/tile/{z}/{y}/{x}.jpg'
+    image = cimgt.GoogleTiles(url=url)
+    ax.add_image(image, zoomLevel,zorder=1) #zoom level
     # Plot the DSWx tile boundary polygons
     geom_granules.boundary.plot(ax=ax, color='lightblue', linewidth=.5)
     
@@ -199,3 +206,16 @@ def main():
     filtered_urls,dswx_data_df = searchDSWx(ps)
     
     dlDSWx(filtered_urls,ps,ps.outdir)
+    
+    return filtered_urls,dswx_data_df
+
+
+if __name__ == '__main__':
+    '''
+    Main driver.
+    '''
+
+    inps = cmdLineParser()
+    main(inps)
+
+    
