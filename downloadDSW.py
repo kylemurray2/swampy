@@ -17,14 +17,13 @@ import json
 from urllib.request import urlopen
 import requests
 import concurrent.futures
-
 import geopandas as gpd
+import pandas as pd
 from shapely.geometry import shape
 from matplotlib import pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-
-
+import numpy as np
 nproc = int(os.cpu_count())
 
 def filter_by_cloud_cover(item, threshold=10):
@@ -50,6 +49,12 @@ def return_granule(item):
     
     
 def searchDSWx(ps):
+    '''
+    Searches DSWx data given polygon AOI and date range. 
+    Returns:
+        filtered_urls: urls to the data from sparse-cloud days
+        dswx_data_df: pandas dataframe for all search results
+    '''
 
     # convert to the datetime format
     start_date = datetime(int(ps.date_start[0:4]), int(ps.date_start[4:6]), int(ps.date_start[6:8]))    
@@ -62,7 +67,7 @@ def searchDSWx(ps):
     # Search data through CMR-STAC API
     stac = 'https://cmr.earthdata.nasa.gov/cloudstac/'    # CMR-STAC API Endpoint
     print("Connecting to API...")
-    api = Client.open(f'{stac}/POCLOUD/')
+    api = Client.open(f'{stac}POCLOUD/')
     collections = ['OPERA_L3_DSWX-HLS_PROVISIONAL_V1']
     
     search_params = {"collections": collections,
@@ -71,8 +76,8 @@ def searchDSWx(ps):
                      "max_items": 10000}
     search_dswx = api.search(**search_params)
     items = search_dswx.get_all_items()
-
-    plot_frames(list(search_dswx.items()),aoi)
+    dswx_data =list(search_dswx.items())
+    plot_frames(dswx_data,aoi)
 
     # Filter cloudy days
     print("Filtering cloudy days...")
@@ -83,7 +88,25 @@ def searchDSWx(ps):
     filtered_urls = list(map(return_granule, filtered_items))
     print(len(filtered_urls))
     
-    return filtered_urls
+    
+    # Create table of search results
+    dswx_data_df = []
+    for item in dswx_data:
+        item.to_dict()
+        fn = item.id.split('_')
+        ID = fn[3]
+        sensor = fn[6]
+        dat = item.datetime.strftime('%Y-%m-%d')
+        # spatial_coverage = intersection_percent(item, intersects_geometry)
+        geom = item.geometry
+
+        # Take all the band href information 
+        band_links = [item.assets[links].href for links in item.assets.keys()]
+        dswx_data_df.append([ID,sensor,dat,geom,band_links])
+
+    dswx_data_df = pd.DataFrame(dswx_data_df, columns = ['TileID', 'Sensor', 'Date', 'Footprint','BandLinks'])
+    
+    return filtered_urls, dswx_data_df
 
 
 def dl(url,outname):   
@@ -97,7 +120,9 @@ def dl(url,outname):
 
             
 def dlDSWx(urls,ps,outdir): 
-
+    '''
+    Download the DSWx files given urls
+    '''
     # Create a list of file path/names
     outNames = []
     dl_list = []
@@ -130,16 +155,19 @@ def dlDSWx(urls,ps,outdir):
                 
 
 def plot_frames(dswx_data,aoi):
+    '''
+    Plot the footprints from the DSWx search results
+    '''
     # Visualize the DSWx tile boundary and the user-defined bbox
     geom_df = []
     for d,_ in enumerate(dswx_data):
         geom_df.append(shape(dswx_data[d].geometry))
     geom_granules = gpd.GeoDataFrame({'geometry':geom_df})
     
-    minlon = min(coord[0] for coord in aoi.__geo_interface__['coordinates'][0])
-    maxlon = max(coord[0] for coord in aoi.__geo_interface__['coordinates'][0])
-    minlat = min(coord[1] for coord in aoi.__geo_interface__['coordinates'][0])
-    maxlat = max(coord[1] for coord in aoi.__geo_interface__['coordinates'][0])
+    minlon = np.floor(min(coord[0] for coord in aoi.__geo_interface__['coordinates'][0]))
+    maxlon = np.ceil(max(coord[0] for coord in aoi.__geo_interface__['coordinates'][0]))
+    minlat = np.floor(min(coord[1] for coord in aoi.__geo_interface__['coordinates'][0]))
+    maxlat = np.ceil(max(coord[1] for coord in aoi.__geo_interface__['coordinates'][0]))
     
     # Set up the figure and axis with a chosen map projection (e.g., PlateCarree)
     fig, ax = plt.subplots(figsize=(10, 10), subplot_kw={'projection': ccrs.PlateCarree()})
@@ -154,8 +182,10 @@ def plot_frames(dswx_data,aoi):
     # Plot the DSWx tile boundary polygons
     geom_granules.boundary.plot(ax=ax, color='lightblue', linewidth=.5)
     
+    aoi_series = gpd.GeoSeries([aoi])
+
     # Plot the user-specified AOI polygon
-    aoi.boundary.plot(ax=ax, color='#8B0000', linewidth=1,linestyle='--')
+    aoi_series.boundary.plot(ax=ax, color='#8B0000', linewidth=1,linestyle='--')
     
     plt.title("DSWx Tile Boundary and User-specified AOI")
     plt.show()
@@ -166,6 +196,6 @@ def main():
     ps = config.getPS()
 
     # Get the filtered list of urls
-    filtered_urls = searchDSWx(ps)
+    filtered_urls,dswx_data_df = searchDSWx(ps)
     
     dlDSWx(filtered_urls,ps,ps.outdir)
