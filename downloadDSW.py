@@ -126,8 +126,16 @@ def dlDSWx(urls,ps,outdir):
     # Create a list of file path/names
     outNames = []
     dl_list = []
+    outdir2 = './westCoastData'
+    
+    for url in urls:
+        fname2 = os.path.join(outdir2, url.split('/')[-1])
+        if os.path.isfile(fname2):
+            os.system('ln -s ' + fname2 + ' outdir/')
+    
     for url in urls:
         fname = os.path.join(outdir, url.split('/')[-1])
+
         if not os.path.isfile(fname):
             outNames.append(os.path.join(outdir, url.split('/')[-1]))
             dl_list.append(url)
@@ -215,7 +223,6 @@ if __name__ == '__main__':
     Main driver.
     '''
 
-    inps = cmdLineParser()
-    main(inps)
+    # main()
 
     
