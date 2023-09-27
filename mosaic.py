@@ -8,23 +8,14 @@ Created on Fri Sep 22 16:06:50 2023
 @author: km
 """
 
-# GIS imports
-import geopandas as gpd
-import rasterio
-from rasterio.merge import merge
-from rasterio.crs import CRS
-from rasterio.warp import transform_bounds, calculate_default_transform, reproject, Resampling
-from shapely import Polygon
-import fiona
-from pystac_client import Client
+import rasterio, os, glob
 import numpy as np
+from rasterio.merge import merge
+from rasterio.warp import calculate_default_transform, reproject, Resampling
 from collections import defaultdict
 from multiprocessing import Pool
 from pathlib import Path
-import os,glob
-import json
 from swampy import config
-
 from itertools import repeat
 
 def organize_by_crs(crs, file_list,output_path):
@@ -37,25 +28,33 @@ def organize_by_crs(crs, file_list,output_path):
         
 def organize_files(ps):
     output_path = Path(ps.outdir)
-    # DSWx files have colormaps associated with them. Let's save it for later use
-    # if len(file_list) > 0 : 
         
     # Organize and mosaic granules
     files_by_crs = defaultdict(list)
     for f in [f for f in output_path.iterdir() if f.is_dir()]:
         files_by_crs[f.name] = list(f.glob("OPERA*_WTR.tif"))
         
-        
     # Organize downloaded into folders by CRS 
-    # files_by_crs = defaultdict(list)
     for i, f in enumerate(list(output_path.glob('*.tif'))):
         with rasterio.open(f) as ds:
             files_by_crs[ds.profile['crs'].to_string()].append(f)
     
     
+    current_output_path = output_path/crs
+    if not current_output_path.exists():
+        current_output_path.mkdir()
+    
+    for f in file_list:
+        f.rename(current_output_path/f.name)
+    
+    fl = files_by_crs.values()
+    crs = files_by_crs.keys()
+    
+    
     _ = list(map(organize_by_crs, files_by_crs.keys(), files_by_crs.values(),repeat(output_path)))
 
     return files_by_crs
+
 
 def reprojectDSWx(epsg_code, file_batch, output_filename, dswx_colormap, resolution_reduction_factor = 2):
     '''
@@ -107,7 +106,6 @@ def reprojectDSWx(epsg_code, file_batch, output_filename, dswx_colormap, resolut
     return output_filename
 
 
-
 def main():
     ps = config.getPS()
         
@@ -122,10 +120,8 @@ def main():
         
     output_path = Path(ps.outdir)
     
-    # Mosaicking a large number of files in one attempt will be time and memory intensive.
-    # Instead, we can mosaic chunks in parallel, and reduce the resolution of each mosaic by a factor of 2
-    # The mosaics generated in this step can then be subsequently combined similarly
-    nchunks = 10
+
+    nchunks = 40
     for key in files_by_crs.keys():
         mosaic_folder = (output_path/key/'mosaics')
         mosaic_folder.mkdir(parents=True, exist_ok=True)
@@ -133,10 +129,14 @@ def main():
         filename_chunks = np.array_split(filenames, nchunks)
         
         output_filename = 'temp_{}_{}.tif'
-    
         function_inputs = []
-        function_inputs = [(key, chunk, mosaic_folder/output_filename.format(key, str(count).zfill(4)), dswx_colormap) for count, chunk in enumerate(filename_chunks) if len(chunk) > 0]
-        
+        count = 0
+        for chunk in filename_chunks:
+            if len(chunk) > 0:
+                input_tuple = (key, chunk, mosaic_folder/output_filename.format(key, str(count).zfill(4)), dswx_colormap)
+                function_inputs.append(input_tuple)
+                count += 1
+                
         with Pool() as pool:
             output_files = pool.starmap(reprojectDSWx, function_inputs)
             
@@ -150,7 +150,7 @@ def main():
             mosaic_list.append(file)
             
             
-    final_mosaic_path = Path('./salton_data/outputs')
+    final_mosaic_path =Path(ps.outdir + '/outputs')
     if not final_mosaic_path.exists():
         final_mosaic_path.mkdir()
     reprojectDSWx('EPSG:4326', mosaic_list, Path(final_mosaic_path / 'final_mosaic.tif'),dswx_colormap)

@@ -119,29 +119,29 @@ def dl(url,outname):
             file.write(data)
 
             
-def dlDSWx(urls,ps,outdir): 
+def dlDSWx(urls,ps,dataDir): 
     '''
     Download the DSWx files given urls
     '''
     # Create a list of file path/names
     outNames = []
     dl_list = []
-    outdir2 = './westCoastData'
+    # dataDir2 = './westCoastData'
+    
+    # for url in urls:
+    #     fname2 = os.path.join(dataDir2, url.split('/')[-1])
+    #     if os.path.isfile(fname2):
+    #         os.system('ln -s ' + fname2 + ' dataDir/')
     
     for url in urls:
-        fname2 = os.path.join(outdir2, url.split('/')[-1])
-        if os.path.isfile(fname2):
-            os.system('ln -s ' + fname2 + ' outdir/')
-    
-    for url in urls:
-        fname = os.path.join(outdir, url.split('/')[-1])
+        fname = os.path.join(dataDir, url.split('/')[-1])
 
         if not os.path.isfile(fname):
-            outNames.append(os.path.join(outdir, url.split('/')[-1]))
+            outNames.append(os.path.join(dataDir, url.split('/')[-1]))
             dl_list.append(url)
             
-    if not os.path.isdir(outdir):
-        os.mkdir(outdir)
+    if not os.path.isdir(dataDir):
+        os.mkdir(dataDir)
         
         
     print('Downloading the following files:')
@@ -154,7 +154,7 @@ def dlDSWx(urls,ps,outdir):
 
     # check the files
     for url in urls:
-        fname = os.path.join(outdir, url.split('/')[-1])
+        fname = os.path.join(dataDir, url.split('/')[-1])
         if not os.path.isfile(fname):
             print('Warning: File does not exist ' + fname)
         else:
@@ -213,7 +213,7 @@ def main():
     # Get the filtered list of urls
     filtered_urls,dswx_data_df = searchDSWx(ps)
     
-    dlDSWx(filtered_urls,ps,ps.outdir)
+    dlDSWx(filtered_urls,ps,ps.dataDir)
     
     return filtered_urls,dswx_data_df
 
