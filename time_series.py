@@ -11,8 +11,9 @@ import numpy as np
 import glob
 from swampy import config
 
+
 def load_geotiffs(dataDir):
-    """Load geotiff files from a folder and return a stack of images."""
+    """Load geotiff files from a folder and return a stack of images and their dates."""
     # Use glob to find all GeoTIFF files in the folder
     filepaths = sorted(glob.glob(dataDir + '/*.tif'))
     
@@ -29,9 +30,6 @@ def load_geotiffs(dataDir):
     # Convert list of arrays to a 3D numpy array (time, y, x)
     return dates,np.stack(stacks)
 
-def extract_time_series(stack, x, y):
-    """Extract a time series from a 3D stack for a given x,y location."""
-    return stack[:, y, x]
 
 def plot_time_series(time_series, labels):
     """Plot the time series."""
@@ -43,11 +41,10 @@ def plot_time_series(time_series, labels):
     plt.grid(True)
     plt.show()
 
+
 if __name__ == '__main__':
     
     ps = config.getPS()
-
-    # Folder containing the GeoTIFF files
     
     # Load geotiffs into a stack
     dates,stack = load_geotiffs(ps.dataDir)
@@ -56,7 +53,7 @@ if __name__ == '__main__':
     x, y = 100, 150
     
     # Extract time series for the given x,y location
-    time_series_data = extract_time_series(stack, x, y)
+    time_series_data = stack[:, y, x]
     
     # Plot the time series
     plot_time_series(time_series_data, dates)

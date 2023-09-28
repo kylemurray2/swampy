@@ -88,7 +88,6 @@ def searchDSWx(ps):
     filtered_urls = list(map(return_granule, filtered_items))
     print(len(filtered_urls))
     
-    
     # Create table of search results
     dswx_data_df = []
     for item in dswx_data:
@@ -105,7 +104,13 @@ def searchDSWx(ps):
         dswx_data_df.append([ID,sensor,dat,geom,band_links])
 
     dswx_data_df = pd.DataFrame(dswx_data_df, columns = ['TileID', 'Sensor', 'Date', 'Footprint','BandLinks'])
-    
+
+    # Save the results:
+    dswx_data_df.to_csv('searchResults.csv',index=False)
+    with open('filteredURLs.txt', 'w') as file:
+        for item in filtered_urls:
+            file.write(f"{item}\n")
+        
     return filtered_urls, dswx_data_df
 
 
