@@ -27,7 +27,7 @@ def organize_by_crs(crs, file_list,output_path):
         f.rename(current_output_path/f.name)
         
 def organize_files(ps):
-    output_path = Path(ps.outdir)
+    output_path = Path(ps.dataDir)
         
     # Organize and mosaic granules
     files_by_crs = defaultdict(list)
@@ -39,24 +39,14 @@ def organize_files(ps):
         with rasterio.open(f) as ds:
             files_by_crs[ds.profile['crs'].to_string()].append(f)
     
-    
-    current_output_path = output_path/crs
-    if not current_output_path.exists():
-        current_output_path.mkdir()
-    
-    for f in file_list:
-        f.rename(current_output_path/f.name)
-    
-    fl = files_by_crs.values()
-    crs = files_by_crs.keys()
-    
+
     
     _ = list(map(organize_by_crs, files_by_crs.keys(), files_by_crs.values(),repeat(output_path)))
 
     return files_by_crs
 
 
-def reprojectDSWx(epsg_code, file_batch, output_filename, dswx_colormap, resolution_reduction_factor = 2):
+def reprojectDSWx(epsg_code, file_batch, output_filename, dswx_colormap, resolution_reduction_factor = 1):
     '''
     Takes a list of files in the same CRS and mosaic them, and then reproject 
     it to EPSG:4326.
@@ -109,19 +99,24 @@ def reprojectDSWx(epsg_code, file_batch, output_filename, dswx_colormap, resolut
 def main():
     ps = config.getPS()
         
+
+    
+    os.system('mv ' + ps.dataDir + '/EPSG*/* ./ ' + ps.dataDir + '/')
+    os.system('rm -r ' + ps.dataDir + '/EPSG*')
+    os.system('rm -r ' + ps.dataDir + '/outputs')
+
     # First, organize the files into CRS dirs and return files by crs dict
     files_by_crs = organize_files(ps)
-    
     # Get a list of the tif files
-    file_list = glob.glob(os.path.join(ps.outdir,'*/OPERA*_WTR.tif'))
+    file_list = glob.glob(os.path.join(ps.dataDir,'*/OPERA*_WTR.tif'))
     # Get a colormap from one of the files
     with rasterio.open(file_list[0]) as ds:
         dswx_colormap = ds.colormap(1)
         
-    output_path = Path(ps.outdir)
+    output_path = Path(ps.dataDir)
     
-
-    nchunks = 40
+    resolution_reduction_factor = 1
+    nchunks = 10
     for key in files_by_crs.keys():
         mosaic_folder = (output_path/key/'mosaics')
         mosaic_folder.mkdir(parents=True, exist_ok=True)
@@ -133,12 +128,12 @@ def main():
         count = 0
         for chunk in filename_chunks:
             if len(chunk) > 0:
-                input_tuple = (key, chunk, mosaic_folder/output_filename.format(key, str(count).zfill(4)), dswx_colormap)
+                input_tuple = (key, chunk, mosaic_folder/output_filename.format(key, str(count).zfill(4)), dswx_colormap, resolution_reduction_factor)
                 function_inputs.append(input_tuple)
                 count += 1
                 
         with Pool() as pool:
-            output_files = pool.starmap(reprojectDSWx, function_inputs)
+            output_files = pool.starmap(reprojectDSWx, function_inputs)# 
             
     
     # Now get the mosaic chunks from outdir/EPSG:????/mosaics/*tif and merge those:
@@ -150,7 +145,7 @@ def main():
             mosaic_list.append(file)
             
             
-    final_mosaic_path =Path(ps.outdir + '/outputs')
+    final_mosaic_path =Path(ps.dataDir + '/outputs')
     if not final_mosaic_path.exists():
         final_mosaic_path.mkdir()
     reprojectDSWx('EPSG:4326', mosaic_list, Path(final_mosaic_path / 'final_mosaic.tif'),dswx_colormap)

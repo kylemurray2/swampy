@@ -45,15 +45,11 @@ def plot_time_series(time_series, labels):
 if __name__ == '__main__':
     
     ps = config.getPS()
-    
     # Load geotiffs into a stack
     dates,stack = load_geotiffs(ps.dataDir)
-    
     # Provide x, y coordinates
     x, y = 100, 150
-    
     # Extract time series for the given x,y location
     time_series_data = stack[:, y, x]
-    
     # Plot the time series
     plot_time_series(time_series_data, dates)

@@ -10,12 +10,10 @@ Download DSWx data
 """
 from pystac_client import Client  
 from shapely import wkt
-import os
+import os, json, requests
 from datetime import datetime
 from swampy import config
-import json
 from urllib.request import urlopen
-import requests
 import concurrent.futures
 import geopandas as gpd
 import pandas as pd
@@ -24,7 +22,8 @@ from matplotlib import pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import numpy as np
-nproc = int(os.cpu_count())
+
+nproc = int(os.cpu_count()-1)
 
 def filter_by_cloud_cover(item, threshold=10):
     '''
@@ -147,7 +146,6 @@ def dlDSWx(urls,ps,dataDir):
             
     if not os.path.isdir(dataDir):
         os.mkdir(dataDir)
-        
         
     print('Downloading the following files:')
     print(dl_list)
