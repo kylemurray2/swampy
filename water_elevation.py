@@ -26,6 +26,7 @@ from rasterio.warp import reproject, Resampling
 from rasterio.windows import from_bounds
 from rasterio.warp import transform_bounds
 from skimage.morphology import remove_small_objects
+from datetime import datetime
 
 
 
@@ -129,15 +130,15 @@ def dlDEM(ps):
     return demBounds, DEM
 
 
-def crop_rasters_to_bounds(output_tif_path, dem_path, left, bottom, right, top):
+def crop_rasters_to_bounds(dsw_path, dem_path, minlon, minlat, maxlon, maxlat):
     '''
     Crop DEM and DSW images to same area
     if the two cropped rasters have different shapes, the output_tif raster is 
     resampled to match the dimensions of the dem raster.
     '''
-    with rasterio.open(output_tif_path) as output_tif:
+    with rasterio.open(dsw_path) as output_tif:
         # Transform the bounds to the CRS of the output TIF
-        bounds_transformed = transform_bounds(rasterio.crs.CRS.from_epsg(4326), output_tif.crs, left, bottom, right, top)
+        bounds_transformed = transform_bounds(rasterio.crs.CRS.from_epsg(4326), output_tif.crs, minlon, minlat, maxlon, maxlat)
         
         # Compute the window corresponding to the transformed bounds
         window = from_bounds(*bounds_transformed, output_tif.transform)
@@ -146,12 +147,14 @@ def crop_rasters_to_bounds(output_tif_path, dem_path, left, bottom, right, top):
         output_tif_data = output_tif.read(window=window)
 
     with rasterio.open(dem_path) as dem:
+        
+        transform = rasterio.transform.from_bounds(minlon, minlat, maxlon, maxlat, dem.width, dem.height)
+        bounds_transformed = rasterio.transform.array_bounds(dem.height, dem.width, transform)
         # Compute the window corresponding to the transformed bounds
         window_dem = from_bounds(*bounds_transformed, dem.transform)
         
         # Crop the DEM raster
         dem_data = dem.read(window=window_dem)
-
         # If the cropped output and DEM data have different shapes, resample the output data
         if output_tif_data.shape[1:] != dem_data.shape[1:]:
             output_resampled = dem_data.copy()
@@ -170,7 +173,7 @@ def crop_rasters_to_bounds(output_tif_path, dem_path, left, bottom, right, top):
 
 
 
-def extract_water_edge_elevation(dsw_path, dem_path, ps):
+def extract_water_edge_elevation(dsw_path, dem_path, ps, plot_flag=True):
     # Crop images around polygon bounds  
     print('Cropping the images around the polygon...')
     minlat, maxlat, minlon, maxlon = extract_bounds_from_wkt(ps.polygon,decimals=2)
@@ -188,10 +191,7 @@ def extract_water_edge_elevation(dsw_path, dem_path, ps):
     cleaned_inverse_dsw = remove_small_objects(inverse_cleaned_binary_dsw, minimumPixelsInRegion, connectivity=1)
     binary_dsw_clean = ~cleaned_inverse_dsw
     
-    fig,ax = plt.subplots(2,1)
-    ax[0].imshow(binary_dsw,cmap='magma');ax[0].set_title('Original water mask')
-    ax[1].imshow(binary_dsw_clean,cmap='magma');ax[1].set_title('Cleaned water mask')
-    plt.show()
+
     
     
     # Create a binary mask for DSW == 1
@@ -203,6 +203,10 @@ def extract_water_edge_elevation(dsw_path, dem_path, ps):
         [-1,  8, -1],
         [-1, -1, -1]
     ])
+    
+    # water_mask = water_mask[0:50,0:125]
+    # dem = dem[0:50,0:125]
+
 
     edges = convolve2d(water_mask, kernel, mode='same', boundary='symm')
     edge_mask = edges > 0
@@ -216,35 +220,90 @@ def extract_water_edge_elevation(dsw_path, dem_path, ps):
     edge_line = np.zeros(edge_mask.shape) *np.nan
     edge_line[edge_mask] = 1
 
-    plt.figure()
-    plt.imshow(dem,cmap='magma')
-    plt.imshow(edge_line,cmap='Greys')
-    plt.title('DEM with water edge')
-    plt.show()
+    if plot_flag:
+
+        fig,ax = plt.subplots(2,1)
+        ax[0].imshow(binary_dsw,cmap='magma');ax[0].set_title('Original water mask')
+        ax[1].imshow(binary_dsw_clean,cmap='magma');ax[1].set_title('Cleaned water mask')
+        plt.show()
+    
+        plt.figure()
+        plt.imshow(dem,cmap='magma')
+        plt.imshow(edge_line,cmap='Greys')
+        plt.title('DEM with water edge')
+        plt.show()
     
     return median_elevation
+
+
+def convert_to_decimal_year(date_str):
+    """Convert a YYYYMMDD string to a decimal year."""
+    date_obj = datetime.strptime(date_str, '%Y%m%d')
+    
+    # Start of the year
+    start_of_year = datetime(date_obj.year, 1, 1)
+    
+    # Start of the next year
+    start_of_next_year = datetime(date_obj.year + 1, 1, 1)
+    
+    # Compute the fractional year
+    fraction_passed = (date_obj - start_of_year) / (start_of_next_year - start_of_year)
+    
+    return date_obj.year + fraction_passed
+
+# Convert YYYYMMDD strings to datetime.date objects
+def convert_to_datetime(date_str):
+    return datetime.strptime(date_str, '%Y%m%d').date()
 
 def main():
 
     ps = config.getPS()
+        
+    date_dirs = glob.glob(ps.dataDir + '/2???????')
+    date_dirs.sort()
+    dsw_paths = glob.glob(ps.dataDir + '/2???????/mosaic.tif')
+    dsw_paths.sort()
     
+    dates=[]
+    for date_fn in date_dirs:
+        dates.append(date_fn.split('/')[-1])
+    
+    dec_year = [convert_to_decimal_year(date) for date in dates]
+    date_objects = [convert_to_datetime(date) for date in dates]
+
     # If DEM is needed:
     if ps.demPath == 'none':
         demBounds, dem_path = dlDEM(ps)
     else:
         dem_path = ps.demPath
     
-    # Get paths to mosaic
-    dsw_paths = glob.glob(os.path.join(ps.dataDir,'outputs','*tif'))
-    dsw_path = dsw_paths[0]
+    elevations = []
+    for dsw_path in dsw_paths:
 
-    water_surface_elevation = extract_water_edge_elevation(dsw_path, dem_path,ps)
-    print(f"The estimated water surface elevation is: {water_surface_elevation:.5f} meters.")
+        water_surface_elevation = extract_water_edge_elevation(dsw_path, dem_path,ps)
+        print(f"The estimated water surface elevation is: {water_surface_elevation:.5f} meters.")
+        elevations.append(water_surface_elevation)
     
+    plt.figure()
+    plt.plot(date_objects, elevations, '.')
+    plt.xlabel('Time')
+    plt.ylabel('Water elevation (m)')
+    plt.grid(True)
+    plt.show()
     
 if __name__ == '__main__':
     '''
     Main driver.
     '''
-    main()
+    # main()
+
+# # Open the GeoTIFF file
+# with rasterio.open(dsw_path) as src:
+#     # Read the dataset into a 2D array
+#     array = src.read(1)  # 1 means you are reading the first band. Adjust if your GeoTIFF has multiple bands.
+    
+#     # If you want to extract other metadata or properties of the GeoTIFF
+#     profile = src.profile  # gets the profile of the dataset (CRS, transform, etc.)
+#     transform = src.transform  # gets the affine transform of the dataset
+
 
