@@ -10,7 +10,7 @@ Download DSWx data
 """
 from pystac_client import Client  
 from shapely import wkt
-import os, json, requests
+import os, json, requests, re, glob
 from datetime import datetime
 from swampy import config
 from urllib.request import urlopen
@@ -22,25 +22,34 @@ from matplotlib import pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import numpy as np
+from urllib.error import URLError
 
 nproc = int(os.cpu_count()-1)
+
 
 def filter_by_cloud_cover(item, threshold=10):
     '''
     Removes images with more than <threshold>% cloud cover.
     '''
     xml_url = item.assets['metadata'].href
-    response = urlopen(xml_url)
-    data_json = json.loads(response.read()) # the XML files are formatted as JSONs (?!), so we use a JSON reader
-
-    for item in data_json['AdditionalAttributes']:
-        if item['Name'] == 'PercentCloudCover':
-            break
-    c_cover = int(item['Values'][0])
-    if c_cover<=threshold:
-        return True
-    else:
+    try:
+        response = urlopen(xml_url)
+        data_json = json.loads(response.read())
+    except URLError:
+        print("Error fetching URL:", xml_url)
         return False
+
+    c_cover = -1
+    for attribute in data_json['AdditionalAttributes']:
+        if attribute['Name'] == 'PercentCloudCover':
+            c_cover = int(attribute['Values'][0])
+            break
+
+    if c_cover == -1:
+        print("PercentCloudCover not found in metadata for URL:", xml_url)
+        return False
+
+    return c_cover <= threshold
 
 
 def return_granule(item):
@@ -74,13 +83,13 @@ def searchDSWx(ps):
                      "datetime": [start_date, stop_date],
                      "max_items": 10000}
     search_dswx = api.search(**search_params)
-    items = search_dswx.get_all_items()
+    items = search_dswx.item_collection()
     dswx_data =list(search_dswx.items())
     plot_frames(dswx_data,aoi)
 
     # Filter cloudy days
-    print("Filtering cloudy days...")
-    filtered_items = list(filter(filter_by_cloud_cover, items))
+    print("Filtering cloudy days > " + str(ps.cloudy_threshold) + "%...")
+    filtered_items = list(filter(lambda item: filter_by_cloud_cover(item, threshold=ps.cloudy_threshold), items))
     print(str(len(list(items))) + ' items were found.')
     print(str(len(filtered_items)) + ' items meet the cloud threshold')
 
@@ -138,9 +147,13 @@ def dlDSWx(urls,ps,dataDir):
     #         os.system('ln -s ' + fname2 + ' dataDir/')
     
     for url in urls:
-        fname = os.path.join(dataDir, url.split('/')[-1])
-
-        if not os.path.isfile(fname):
+        file_name = url.split('/')[-1]
+        fname = os.path.join(dataDir, file_name)
+        pattern = f'./data/*/{file_name}'
+        matching_files = glob.glob(pattern)
+        
+        
+        if len(matching_files) == 0:
             outNames.append(os.path.join(dataDir, url.split('/')[-1]))
             dl_list.append(url)
             
@@ -157,7 +170,7 @@ def dlDSWx(urls,ps,dataDir):
 
     # check the files
     for url in urls:
-        fname = os.path.join(dataDir, url.split('/')[-1])
+        fnames = os.path.join(dataDir, url.split('/')[-1])
         if not os.path.isfile(fname):
             print('Warning: File does not exist ' + fname)
         else:
@@ -208,7 +221,34 @@ def plot_frames(dswx_data,aoi):
     plt.title("DSWx Tile Boundary and User-specified AOI")
     plt.show()
     
-    
+
+def extract_date_from_filename(filename):
+    """Extract the date in YYYYMMDD format from the filename."""
+    match = re.search(r'(\d{8})', filename)
+    if match:
+        return match.group(1)
+    else:
+        raise ValueError(f"Cannot extract date from filename: {filename}")
+
+
+def organize_directories(data_dir):
+    tif_files = [f for f in os.listdir(data_dir) if f.endswith('.tif')]
+
+    # Extract unique dates from filenames
+    unique_dates = set([extract_date_from_filename(f) for f in tif_files])
+
+    # Create directories for each unique date
+    for date in unique_dates:
+        os.makedirs(os.path.join(data_dir, date), exist_ok=True)
+
+    # Move the .tif files to the respective directories
+    for f in tif_files:
+        date = extract_date_from_filename(f)
+        destination = os.path.join(data_dir, date, f)
+        source = os.path.join(data_dir, f)
+        os.rename(source, destination)
+
+
 def main():
 
     ps = config.getPS()
@@ -216,8 +256,12 @@ def main():
     # Get the filtered list of urls
     filtered_urls,dswx_data_df = searchDSWx(ps)
     
+    # Download the files
     dlDSWx(filtered_urls,ps,ps.dataDir)
     
+    # Organize files into their respective dates directories
+    organize_directories(ps.dataDir)
+
     return filtered_urls,dswx_data_df
 
 
@@ -225,7 +269,6 @@ if __name__ == '__main__':
     '''
     Main driver.
     '''
-
-    # main()
+    main()
 
     

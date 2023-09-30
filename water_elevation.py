@@ -240,3 +240,11 @@ def main():
 
     water_surface_elevation = extract_water_edge_elevation(dsw_path, dem_path,ps)
     print(f"The estimated water surface elevation is: {water_surface_elevation:.5f} meters.")
+    
+    
+if __name__ == '__main__':
+    '''
+    Main driver.
+    '''
+    main()
+

@@ -5,11 +5,14 @@ Created on Tue Sep 26 16:31:04 2023
 
 @author: km
 """
-import rasterio
+import rasterio, glob
 import matplotlib.pyplot as plt
 import numpy as np
-import glob
 from swampy import config
+
+ps = config.getPS()
+organize_directories(ps.dataDir)
+
 
 
 def load_geotiffs(dataDir):
