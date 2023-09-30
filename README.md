@@ -2,7 +2,7 @@
 Surface Water Anyalysis Modules in Python   
 version 0.1  
 
-Install:  
+Install dependencies:  
 
     conda env create -f swampy/docs/requirements.yaml  
 > Add swampy to your PATH and PYTHONPATH environment variables 
