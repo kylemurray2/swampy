@@ -1,0 +1,32 @@
+# create environment : conda env create -f requirements.yaml
+# update dependencies: conda env update -f requirements.yaml
+# remove environment : conda env remove -n swampy
+# enter  environment : conda activate swampy
+# exit   environment : conda deactivate
+
+name: swampy
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10  # assuming you're using python 3.8; adjust accordingly
+  - numpy
+  - matplotlib
+  - os
+  - rasterio
+  - scipy
+  - requests
+  - glob
+  - urllib
+  - shapely
+  - geopandas
+  - pandas
+  - cartopy
+  - yaml
+  - argparse
+  - concurrent.futures
+  - multiprocessing
+  - pathlib
+  - collections
+  - itertools
+  - shutil
+  - pystac-client
