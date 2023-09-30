@@ -26,22 +26,21 @@ def organize_by_crs(crs, file_list,output_path):
     for f in file_list:
         f.rename(current_output_path/f.name)
         
-def organize_files(ps):
-    output_path = Path(ps.dataDir)
-        
+def organize_files(ps,dataDir):
+    dataDir = Path(dataDir)   
     # Organize and mosaic granules
     files_by_crs = defaultdict(list)
-    for f in [f for f in output_path.iterdir() if f.is_dir()]:
+    for f in [f for f in dataDir.iterdir() if f.is_dir()]:
         files_by_crs[f.name] = list(f.glob("OPERA*_WTR.tif"))
         
     # Organize downloaded into folders by CRS 
-    for i, f in enumerate(list(output_path.glob('*.tif'))):
+    for i, f in enumerate(list(dataDir.glob('*.tif'))):
         with rasterio.open(f) as ds:
             files_by_crs[ds.profile['crs'].to_string()].append(f)
     
 
     
-    _ = list(map(organize_by_crs, files_by_crs.keys(), files_by_crs.values(),repeat(output_path)))
+    _ = list(map(organize_by_crs, files_by_crs.keys(), files_by_crs.values(),repeat(dataDir)))
 
     return files_by_crs
 
@@ -101,51 +100,72 @@ def main():
         
 
     
-    os.system('mv ' + ps.dataDir + '/EPSG*/* ./ ' + ps.dataDir + '/')
-    os.system('rm -r ' + ps.dataDir + '/EPSG*')
-    os.system('rm -r ' + ps.dataDir + '/outputs')
+    # os.system('mv ' + ps.dataDir + '/EPSG*/* ./ ' + ps.dataDir + '/')
+    # os.system('rm -r ' + ps.dataDir + '/EPSG*')
+    # os.system('rm -r ' + ps.dataDir + '/outputs')
 
     # First, organize the files into CRS dirs and return files by crs dict
-    files_by_crs = organize_files(ps)
-    # Get a list of the tif files
-    file_list = glob.glob(os.path.join(ps.dataDir,'*/OPERA*_WTR.tif'))
-    # Get a colormap from one of the files
-    with rasterio.open(file_list[0]) as ds:
-        dswx_colormap = ds.colormap(1)
-        
-    output_path = Path(ps.dataDir)
     
-    resolution_reduction_factor = 1
-    nchunks = 10
-    for key in files_by_crs.keys():
-        mosaic_folder = (output_path/key/'mosaics')
-        mosaic_folder.mkdir(parents=True, exist_ok=True)
-        filenames = list((output_path/key).glob('*.tif'))
-        filename_chunks = np.array_split(filenames, nchunks)
-        
-        output_filename = 'temp_{}_{}.tif'
-        function_inputs = []
-        count = 0
-        for chunk in filename_chunks:
-            if len(chunk) > 0:
-                input_tuple = (key, chunk, mosaic_folder/output_filename.format(key, str(count).zfill(4)), dswx_colormap, resolution_reduction_factor)
-                function_inputs.append(input_tuple)
-                count += 1
+    
+    date_dirs = glob.glob(ps.dataDir + '/2???????')
+    date_dirs.sort()
+    dates=[]
+    for date_fn in date_dirs:
+        dates.append(date_fn.split('/')[-1])
+    
+    
+    for date_dir in date_dirs:
+    
+        files_by_crs = organize_files(ps,date_dir)
+        # Get a list of the tif files
+        file_list = glob.glob(os.path.join(ps.dataDir,'????????', 'EPSG*','*_WTR.tif'))
+       
+        if len(file_list)==0:
+            print('No tif files found in the date directory ' + date_dir)
+        else:
+            # Get a colormap from one of the files
+            with rasterio.open(file_list[0]) as ds:
+                dswx_colormap = ds.colormap(1)
                 
-        with Pool() as pool:
-            output_files = pool.starmap(reprojectDSWx, function_inputs)# 
+            output_path = Path(date_dir)
             
-    
-    # Now get the mosaic chunks from outdir/EPSG:????/mosaics/*tif and merge those:
-    mosaic_list = []
-    for folder in output_path.iterdir():
-        if folder.name == 'outputs':
-            pass
-        for file in list((folder /'mosaics').glob('*.tif')):
-            mosaic_list.append(file)
+            resolution_reduction_factor = 1
+            nchunks = 10
+            for key in files_by_crs.keys():
+                mosaic_folder = (output_path/key/'mosaics')
+                mosaic_folder.mkdir(parents=True, exist_ok=True)
+                filenames = list((output_path/key).glob('*.tif'))
+                filename_chunks = np.array_split(filenames, nchunks)
+                
+                output_filename = 'temp_{}_{}.tif'
+                function_inputs = []
+                count = 0
+                for chunk in filename_chunks:
+                    if len(chunk) > 0:
+                        input_tuple = (key, chunk, mosaic_folder/output_filename.format(key, str(count).zfill(4)), dswx_colormap, resolution_reduction_factor)
+                        function_inputs.append(input_tuple)
+                        count += 1
+                        
+                with Pool() as pool:
+                    output_files = pool.starmap(reprojectDSWx, function_inputs)# 
+                    
             
+            # Now get the mosaic chunks from outdir/EPSG:????/mosaics/*tif and merge those:    
+            mosaic_list = glob.glob(os.path.join(date_dir,'EPSG*','mosaics','*tif'))
             
-    final_mosaic_path =Path(ps.dataDir + '/outputs')
-    if not final_mosaic_path.exists():
-        final_mosaic_path.mkdir()
-    reprojectDSWx('EPSG:4326', mosaic_list, Path(final_mosaic_path / 'final_mosaic.tif'),dswx_colormap)
+            final_mosaic_path =Path(date_dir + '/outputs')
+            if not final_mosaic_path.exists():
+                final_mosaic_path.mkdir()
+            
+            if len(mosaic_list)>1:
+                # If there are multiple mosaic files, then merge them
+                reprojectDSWx('EPSG:4326', mosaic_list, Path(final_mosaic_path / 'final_mosaic.tif'),dswx_colormap)
+            else:
+                # If there is only one, then just link to the original file as the output
+                source_name = glob.glob(date_dir + '/EPSG*/*tif')
+                source_name_abs = os.path.abspath(source_name[0])
+                if len(source_name) > 1:
+                    print("Something went wrong")
+                else:
+                    link_name = os.path.join(str(final_mosaic_path),'final_mosaic.tif')
+                    os.symlink(source_name_abs, link_name)

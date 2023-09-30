@@ -170,7 +170,7 @@ def dlDSWx(urls,ps,dataDir):
 
     # check the files
     for url in urls:
-        fnames = os.path.join(dataDir, url.split('/')[-1])
+        fname = os.path.join(dataDir, url.split('/')[-1])
         if not os.path.isfile(fname):
             print('Warning: File does not exist ' + fname)
         else:
