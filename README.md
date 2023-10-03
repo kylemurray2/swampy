@@ -2,6 +2,9 @@
 Surface Water Anyalysis Modules in Python   
 version 0.1  
 
+Basic tools designed to work with JPL OPERA Dynamic Surface Water eXtent (DSWx) products
+https://www.jpl.nasa.gov/go/opera/products/dswx-product-suite
+
 Install dependencies:  
 
     conda env create -f swampy/docs/requirements.yaml  
