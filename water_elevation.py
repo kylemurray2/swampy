@@ -3,14 +3,14 @@
 """
 Created on Wed Sep 27 14:12:46 2023
 
-Download Copernicus DEM if needed
-Read the DSW image and DEM rasters.
-Create a binary mask from the DSW raster where there is water.
-For the border of the DSW, use a convolution with a 3x3 filter to find the 
+-Download Copernicus DEM if needed
+-Read the DSW image and DEM rasters.
+-Create a binary mask from the DSW raster where there is water.
+-For the border of the DSW, use a convolution with a 3x3 filter to find the 
 edges.
-Using the binary edge mask, extract elevation values from the DEM where the 
+-Using the binary edge mask, extract elevation values from the DEM where the 
 mask is True.
-Calculate the average or median of these elevation values, which will give you 
+-Calculate the average or median of these elevation values, which will give you 
 an approximation of the water surface elevation.
 
 @author: km
