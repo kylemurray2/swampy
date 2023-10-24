@@ -106,11 +106,11 @@ def extract_bounds_from_wkt(wkt_string, decimals=1):
 
         
 def dlDEM(ps):
-
+    '''
+    Download the DEM
+    '''
     minlat, maxlat, minlon, maxlon = extract_bounds_from_wkt(ps.polygon,decimals=0)
-
     demBounds = f"{int(minlat)},{int(maxlat)},{int(minlon)},{int(maxlon)}"
-    
     # Download dem if it doesn't exist
     if not os.path.isdir('./DEM'):
         print("Downloading copernicus DEM with bounds " + demBounds)
@@ -130,11 +130,24 @@ def dlDEM(ps):
     return demBounds, DEM
 
 
-def crop_rasters_to_bounds(dsw_path, dem_path, minlon, minlat, maxlon, maxlat):
+def read_crop_DEM(ps):
     '''
-    Crop DEM and DSW images to same area
-    if the two cropped rasters have different shapes, the output_tif raster is 
-    resampled to match the dimensions of the dem raster.
+    Reads the DEM file and crops based on polygon in params.yaml
+    '''
+    minlat, maxlat, minlon, maxlon = extract_bounds_from_wkt(ps.polygon,decimals=2)
+    dem_ds = rasterio.open(ps.demPath)
+    transform = rasterio.transform.from_bounds(minlon, minlat, maxlon, maxlat, dem_ds.width, dem_ds.height)
+    bounds_transformed = rasterio.transform.array_bounds(dem_ds.height, dem_ds.width, transform)
+    window_dem = from_bounds(*bounds_transformed, dem_ds.transform)
+    dem = dem_ds.read(window=window_dem)
+    
+    return dem,dem_ds
+
+
+def crop_rasters_to_bounds(dsw_path, dem_ds, minlon, minlat, maxlon, maxlat):
+    '''
+    Crop DSW image to same area as DEM
+    The output_tif raster is then resampled to match the dimensions of the dem raster.
     '''
     with rasterio.open(dsw_path) as output_tif:
         # Transform the bounds to the CRS of the output TIF
@@ -146,43 +159,47 @@ def crop_rasters_to_bounds(dsw_path, dem_path, minlon, minlat, maxlon, maxlat):
         # Crop the raster
         output_tif_data = output_tif.read(window=window)
 
-    with rasterio.open(dem_path) as dem:
-        
-        transform = rasterio.transform.from_bounds(minlon, minlat, maxlon, maxlat, dem.width, dem.height)
-        bounds_transformed = rasterio.transform.array_bounds(dem.height, dem.width, transform)
-        # Compute the window corresponding to the transformed bounds
-        window_dem = from_bounds(*bounds_transformed, dem.transform)
-        
-        # Crop the DEM raster
-        dem_data = dem.read(window=window_dem)
-        # If the cropped output and DEM data have different shapes, resample the output data
-        if output_tif_data.shape[1:] != dem_data.shape[1:]:
-            output_resampled = dem_data.copy()
-            reproject(
-                output_tif_data, 
-                output_resampled,
-                src_transform=rasterio.windows.transform(window, output_tif.transform),
-                src_crs=output_tif.crs,
-                dst_transform=rasterio.windows.transform(window_dem, dem.transform),
-                dst_crs=dem.crs,
-                resampling=Resampling.bilinear
-            )
-            output_tif_data = output_resampled
+    transform = rasterio.transform.from_bounds(minlon, minlat, maxlon, maxlat, dem_ds.width, dem_ds.height)
+    bounds_transformed = rasterio.transform.array_bounds(dem_ds.height, dem_ds.width, transform)
+    # Compute the window corresponding to the transformed bounds
+    window_dem = from_bounds(*bounds_transformed, dem_ds.transform)
+    
+    # Crop the DEM raster
+    dem = dem_ds.read(window=window_dem)
+    # If the cropped output and DEM data have different shapes, resample the output data
+    if output_tif_data.shape[1:] != dem.shape[1:]:
+        output_resampled = dem.copy()
+        reproject(
+            output_tif_data, 
+            output_resampled,
+            src_transform=rasterio.windows.transform(window, output_tif.transform),
+            src_crs=output_tif.crs,
+            dst_transform=rasterio.windows.transform(window_dem, dem_ds.transform),
+            dst_crs=dem_ds.crs,
+            resampling=Resampling.bilinear
+        )
+        output_tif_data = output_resampled
 
-    return output_tif_data, dem_data
+    return output_tif_data, dem
 
 
-
-def extract_water_edge_elevation(dsw_path, dem_path, ps, plot_flag=True):
+def extract_water_edge_elevation(dsw_path, dem_ds, ps, plot_flag=True):
     # Crop images around polygon bounds  
     print('Cropping the images around the polygon...')
     minlat, maxlat, minlon, maxlon = extract_bounds_from_wkt(ps.polygon,decimals=2)
     
+    dsw,dem = crop_rasters_to_bounds(dsw_path, dem_ds, minlon, minlat, maxlon, maxlat)
     
-    dsw,dem = crop_rasters_to_bounds(dsw_path, dem_path, minlon, minlat, maxlon, maxlat)
     dsw =dsw[0,:,:]
     dem =dem[0,:,:]
     binary_dsw = dsw !=0
+    
+    
+    plt.figure();plt.imshow(dem)
+    values, counts = np.unique(dem.ravel(), return_counts=True)
+    mode_value = values[np.argmax(counts)]
+    guess = dem==mode_value
+    plt.figure();plt.imshow(guess)
 
     minimumPixelsInRegion = 60
     # Remove small objects (i.e., small islands of zeros)
@@ -190,9 +207,6 @@ def extract_water_edge_elevation(dsw_path, dem_path, ps, plot_flag=True):
     inverse_cleaned_binary_dsw = ~cleaned_binary_dsw
     cleaned_inverse_dsw = remove_small_objects(inverse_cleaned_binary_dsw, minimumPixelsInRegion, connectivity=1)
     binary_dsw_clean = ~cleaned_inverse_dsw
-    
-
-    
     
     # Create a binary mask for DSW == 1
     water_mask = binary_dsw_clean == 1
@@ -207,7 +221,6 @@ def extract_water_edge_elevation(dsw_path, dem_path, ps, plot_flag=True):
     # water_mask = water_mask[0:50,0:125]
     # dem = dem[0:50,0:125]
 
-
     edges = convolve2d(water_mask, kernel, mode='same', boundary='symm')
     edge_mask = edges > 0
 
@@ -219,6 +232,7 @@ def extract_water_edge_elevation(dsw_path, dem_path, ps, plot_flag=True):
 
     edge_line = np.zeros(edge_mask.shape) *np.nan
     edge_line[edge_mask] = 1
+
 
     if plot_flag:
 
@@ -255,6 +269,9 @@ def convert_to_decimal_year(date_str):
 def convert_to_datetime(date_str):
     return datetime.strptime(date_str, '%Y%m%d').date()
 
+
+
+
 def main():
 
     ps = config.getPS()
@@ -273,14 +290,13 @@ def main():
 
     # If DEM is needed:
     if ps.demPath == 'none':
-        demBounds, dem_path = dlDEM(ps)
-    else:
-        dem_path = ps.demPath
+        demBounds, ps.demPath = dlDEM(ps)
+    
+    dem,dem_ds = read_crop_DEM(ps)
     
     elevations = []
     for dsw_path in dsw_paths:
-
-        water_surface_elevation = extract_water_edge_elevation(dsw_path, dem_path,ps)
+        water_surface_elevation = extract_water_edge_elevation(dsw_path, dem_ds, ps)
         print(f"The estimated water surface elevation is: {water_surface_elevation:.5f} meters.")
         elevations.append(water_surface_elevation)
     
