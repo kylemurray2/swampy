@@ -193,13 +193,6 @@ def extract_water_edge_elevation(dsw_path, dem_ds, ps, plot_flag=True):
     dsw =dsw[0,:,:]
     dem =dem[0,:,:]
     binary_dsw = dsw !=0
-    
-    
-    plt.figure();plt.imshow(dem)
-    values, counts = np.unique(dem.ravel(), return_counts=True)
-    mode_value = values[np.argmax(counts)]
-    guess = dem==mode_value
-    plt.figure();plt.imshow(guess)
 
     minimumPixelsInRegion = 60
     # Remove small objects (i.e., small islands of zeros)
@@ -208,46 +201,60 @@ def extract_water_edge_elevation(dsw_path, dem_ds, ps, plot_flag=True):
     cleaned_inverse_dsw = remove_small_objects(inverse_cleaned_binary_dsw, minimumPixelsInRegion, connectivity=1)
     binary_dsw_clean = ~cleaned_inverse_dsw
     
-    # Create a binary mask for DSW == 1
-    water_mask = binary_dsw_clean == 1
-
-    # Find the edges of the water mask using convolution
-    kernel = np.array([
-        [-1, -1, -1],
-        [-1,  8, -1],
-        [-1, -1, -1]
-    ])
+    if len(np.unique(binary_dsw_clean))==2:
+                
+        # plt.figure();plt.imshow(dsw);plt.title('binary_dsw')
+        # plt.figure();plt.imshow(binary_dsw_clean);plt.title('binary_dsw_clean')
     
-    # water_mask = water_mask[0:50,0:125]
-    # dem = dem[0:50,0:125]
-
-    edges = convolve2d(water_mask, kernel, mode='same', boundary='symm')
-    edge_mask = edges > 0
-
-    # Extract the elevation values from the DEM where the edge mask is True
-    water_edge_elevations = dem[edge_mask]
-
-    # Calculate the median elevation of the water's edge
-    median_elevation = np.median(water_edge_elevations)
-
-    edge_line = np.zeros(edge_mask.shape) *np.nan
-    edge_line[edge_mask] = 1
-
-
-    if plot_flag:
-
-        fig,ax = plt.subplots(2,1)
-        ax[0].imshow(binary_dsw,cmap='magma');ax[0].set_title('Original water mask')
-        ax[1].imshow(binary_dsw_clean,cmap='magma');ax[1].set_title('Cleaned water mask')
-        plt.show()
+        
+        # Create a binary mask for DSW == 1
+        water_mask = binary_dsw_clean == 1
     
-        plt.figure()
-        plt.imshow(dem,cmap='magma')
-        plt.imshow(edge_line,cmap='Greys')
-        plt.title('DEM with water edge')
-        plt.show()
+        # Find the edges of the water mask using convolution
+        kernel = np.array([
+            [-1, -1, -1],
+            [-1,  8, -1],
+            [-1, -1, -1]
+        ])
+        
+        # water_mask = water_mask[0:50,0:125]
+        # dem = dem[0:50,0:125]
     
-    return median_elevation
+        edges = convolve2d(water_mask, kernel, mode='same', boundary='symm')
+        edge_mask = edges > 0
+    
+        # Extract the elevation values from the DEM where the edge mask is True
+        water_edge_elevations = dem[edge_mask]
+    
+        water_edge_elevations_rounded = np.round(water_edge_elevations)
+        values, counts = np.unique(water_edge_elevations_rounded.ravel(), return_counts=True)
+        mode_elevation = values[np.argmax(counts)]
+    
+        # Calculate the median elevation of the water's edge
+        median_elevation = np.median(water_edge_elevations)
+    
+        edge_line = np.zeros(edge_mask.shape) *np.nan
+        edge_line[edge_mask] = 1
+    
+    
+        if plot_flag:
+    
+            fig,ax = plt.subplots(2,1)
+            ax[0].imshow(binary_dsw,cmap='magma');ax[0].set_title('Original water mask')
+            ax[1].imshow(binary_dsw_clean,cmap='magma');ax[1].set_title('Cleaned water mask')
+            plt.show()
+        
+            plt.figure()
+            plt.imshow(dem,cmap='magma')
+            plt.imshow(edge_line,cmap='Greys')
+            plt.title('DEM with water edge')
+            plt.show()
+    
+    else:
+        print(dsw_path + ' failed')
+        median_elevation,mode_elevation = np.nan,np.nan
+    
+    return median_elevation,mode_elevation
 
 
 def convert_to_decimal_year(date_str):
@@ -293,25 +300,38 @@ def main():
         demBounds, ps.demPath = dlDEM(ps)
     
     dem,dem_ds = read_crop_DEM(ps)
+    dem = dem[0,:,:]
+    plt.figure();plt.imshow(dem);plt.title('DEM')
     
-    elevations = []
+    # Find the elevation of water in the DEM and make a guess water mask
+    values, counts = np.unique(dem.ravel(), return_counts=True)
+    mode_value = values[np.argmax(counts)]
+    guess = dem==mode_value
+    plt.figure();plt.imshow(guess);plt.title('Water mask initial guess')
+    
+    elevations_medians = []
+    elevations_modes = []
+
     for dsw_path in dsw_paths:
-        water_surface_elevation = extract_water_edge_elevation(dsw_path, dem_ds, ps)
-        print(f"The estimated water surface elevation is: {water_surface_elevation:.5f} meters.")
-        elevations.append(water_surface_elevation)
+        median_elevation,mode_elevation = extract_water_edge_elevation(dsw_path, dem_ds, ps)
+        print(f"The estimated water surface elevation is: {mode_elevation:.5f} meters.")
+        elevations_medians.append(median_elevation)
+        elevations_modes.append(mode_elevation)
     
     plt.figure()
-    plt.plot(date_objects, elevations, '.')
+    plt.plot(date_objects, elevations_medians, '.',label='median')
+    plt.plot(date_objects, elevations_modes, '.',label='mode')
     plt.xlabel('Time')
     plt.ylabel('Water elevation (m)')
     plt.grid(True)
+    plt.legend()
     plt.show()
     
 if __name__ == '__main__':
     '''
     Main driver.
     '''
-    # main()
+    main()
 
 # # Open the GeoTIFF file
 # with rasterio.open(dsw_path) as src:
