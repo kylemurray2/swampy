@@ -7,3 +7,4 @@ collections : ["OPERA_L3_DSWX-HLS_PROVISIONAL_V1"]
 dataDir : ./data # it will make the directory if it doesn't exist
 workdir : ./
 demPath : none # Leave none if you don't already have a DEM
+cloudy_threshold : 100
