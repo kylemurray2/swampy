@@ -162,9 +162,12 @@ def read_crop_DEM(ps):
                 'width': width,
                 'height': height
             })
+            
+            if not os.path.isdir('DEM'):
+                os.mkdir('DEM')
     
             # Reproject and write to a new GeoTIFF
-            with rasterio.open('output_latlon.tif', 'w', **kwargs) as dst:
+            with rasterio.open('DEM/output_latlon.tif', 'w', **kwargs) as dst:
                 for i in range(1, src.count + 1):
                     reproject(
                         source=rasterio.band(src, i),
@@ -175,7 +178,7 @@ def read_crop_DEM(ps):
                         dst_crs={'init': 'EPSG:4326'},
                         resampling=Resampling.nearest)
                     
-            demPath = 'output_latlon.tif'
+            demPath = 'DEM/output_latlon.tif'
             utils.update_yaml_key('params.yaml', 'demPath', demPath)
             print('Updating demPath in params.yaml with new dem')
         else:
@@ -238,7 +241,7 @@ def crop_rasters_to_bounds(dsw_path, dem_ds, minlon, minlat, maxlon, maxlat):
     return output_tif_data, dem
 
 
-def extract_water_edge_elevation(dsw_path, dem_ds, ps, plot_flag=True):
+def extract_water_edge_elevation(dsw_path, dem_ds, ps, guess, plot_flag=True):
     # Crop images around polygon bounds  
     
     # for i in range(10):
@@ -290,10 +293,11 @@ def extract_water_edge_elevation(dsw_path, dem_ds, ps, plot_flag=True):
         water_edge_elevations = dem[edge_mask]
     
         water_edge_elevations_rounded = np.round(water_edge_elevations)
-        water_edge_elevations_rounded = water_edge_elevations_rounded[water_edge_elevations_rounded!=60]
+        # exclude any values that are the exact value of the DEM water elevation (guess)
+        water_edge_elevations_rounded = water_edge_elevations_rounded[water_edge_elevations_rounded!=round(guess)]
         values, counts = np.unique(water_edge_elevations_rounded.ravel(), return_counts=True)
         mode_elevation = values[np.argmax(counts)]
-        
+
         
         # plt.figure()
         # plt.plot(water_edge_elevations_rounded,'.')
@@ -389,7 +393,7 @@ def main(plot_flag = False):
     elevations_modes = []
 
     for dsw_path in dsw_paths:
-        median_elevation,mode_elevation,std_elevation = extract_water_edge_elevation(dsw_path, dem_ds, ps,plot_flag=plot_flag)
+        median_elevation,mode_elevation,std_elevation = extract_water_edge_elevation(dsw_path, dem_ds, ps, guess, plot_flag=plot_flag)
         print(f"The estimated water surface elevation is: {mode_elevation:.5f} meters.")
         elevations_medians.append(median_elevation)
         elevations_modes.append(mode_elevation)

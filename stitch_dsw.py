@@ -105,7 +105,7 @@ def main():
     
     for date_dir in date_dirs:
     
-        os.system('mv ' + date_dir + '/final_mosaic.tif ' + date_dir + '/mosaic.tif')
+        # os.system('mv ' + date_dir + '/final_mosaic.tif ' + date_dir + '/mosaic.tif')
         
         files_by_crs = organize_files(ps,date_dir)
         # Get a list of the tif files
@@ -161,4 +161,10 @@ def main():
                 # Now get the mosaic chunks from outdir/EPSG:????/mosaics/*tif and merge those:    
                 mosaic_list = glob.glob(os.path.join(date_dir,'EPSG*','mosaics','*tif'))
                 reprojectDSWx('EPSG:4326', mosaic_list, Path(final_mosaic_path / 'mosaic.tif'),dswx_colormap)
+
+if __name__ == '__main__':
+    '''
+    Main driver.
+    '''
+    main()
 

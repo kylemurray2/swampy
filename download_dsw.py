@@ -211,7 +211,7 @@ def plot_frames(dswx_data,aoi):
     image = cimgt.GoogleTiles(url=url)
     ax.add_image(image, zoomLevel,zorder=1) #zoom level
     # Plot the DSWx tile boundary polygons
-    geom_granules.boundary.plot(ax=ax, color='lightblue', linewidth=.5)
+    geom_granules.boundary.plot(ax=ax, color='green', linewidth=1)
     
     aoi_series = gpd.GeoSeries([aoi])
 

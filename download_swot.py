@@ -5,7 +5,6 @@ Each dataset has it’s own unique collection ID. For the
 SWOT_SIMULATED_NA_CONTINENT_L2_HR_RIVERSP_V1 dataset, we find the collection ID
 here: https://podaac.jpl.nasa.gov/dataset/SWOT_SIMULATED_NA_CONTINENT_L2_HR_RIVERSP_V1
 
-
 '''
 
 import requests,json,glob,os,zipfile 
