@@ -22,7 +22,6 @@ import os, rasterio, sys, requests, glob
 from scipy.signal import convolve2d
 from swampy import config,utils
 from rasterio.warp import reproject, Resampling
-
 from rasterio.windows import from_bounds
 from rasterio.warp import transform_bounds
 from skimage.morphology import remove_small_objects
@@ -123,13 +122,15 @@ def dlDEM(ps):
 
     # Updating DEM’s wgs84 xml to include the full path to the DEM
     os.system(f'fixImageXml.py -f -i {DEM} >> log')
-
+    
+    utils.update_yaml_key('params.yaml', 'demPath', DEM)
+    print('Updating demPath in params.yaml with copernicus DEM')
+    
     if len(DEM) == 0:
         print('ERROR: DEM does not exists and could not be downloaded.')
         sys.exit(1)
 
     return demBounds, DEM
-
 
 
 def get_epsg(ds):
@@ -139,129 +140,32 @@ def get_epsg(ds):
     return srs.GetAuthorityCode(None)
 
 
+def load_gt(dsw_path):
+    with rasterio.open(dsw_path) as ds:
+        array = ds.read().squeeze()
+    return array
 
-def read_crop_DEM(ps):
+
+
+def extract_water_edge_elevation(dsw_path,dem, ps, mode_value, plot_flag=True):
     '''
-    Reads the DEM file and crops based on polygon in params.yaml
+    Resample DSW image to DEM grid,
+    Find the edge of the water,
+    Find where the edge intersects the DEM and average those elevations
     '''
-    with rasterio.open(ps.demPath) as src:
-        # Get the current CRS of the dataset
-        current_crs = src.crs
     
-        print(f"Current CRS of the dataset: {current_crs}")
-    
-        if current_crs.to_epsg() != 4326:
-            transform, width, height = rasterio.warp.calculate_default_transform(
-                current_crs, {'init': 'EPSG:4326'}, src.width, src.height, *src.bounds)
-    
-            # Define metadata for the output file
-            kwargs = src.meta.copy()
-            kwargs.update({
-                'crs': {'init': 'EPSG:4326'},
-                'transform': transform,
-                'width': width,
-                'height': height
-            })
-            
-            if not os.path.isdir('DEM'):
-                os.mkdir('DEM')
-    
-            # Reproject and write to a new GeoTIFF
-            with rasterio.open('DEM/output_latlon.tif', 'w', **kwargs) as dst:
-                for i in range(1, src.count + 1):
-                    reproject(
-                        source=rasterio.band(src, i),
-                        destination=rasterio.band(dst, i),
-                        src_transform=src.transform,
-                        src_crs=src.crs,
-                        dst_transform=transform,
-                        dst_crs={'init': 'EPSG:4326'},
-                        resampling=Resampling.nearest)
-                    
-            demPath = 'DEM/output_latlon.tif'
-            utils.update_yaml_key('params.yaml', 'demPath', demPath)
-            print('Updating demPath in params.yaml with new dem')
-        else:
-            print("The dataset is already in EPSG:4326.")
-            demPath = ps.demPath
-    
-    
-    dem_ds = rasterio.open(demPath)
-    minlat, maxlat, minlon, maxlon = extract_bounds_from_wkt(ps.polygon,decimals=2)
-    transform = rasterio.transform.from_bounds(minlon, minlat, maxlon, maxlat, dem_ds.width, dem_ds.height)
-    bounds_transformed = rasterio.transform.array_bounds(dem_ds.height, dem_ds.width, transform)
-    window_dem = from_bounds(*bounds_transformed, dem_ds.transform)
-    dem = dem_ds.read(window=window_dem)
-    dem[dem<0] = np.nan
-    
-    return dem,dem_ds
+    print('resampling DSW to the DEM grid')
+    dsw = utils.resample_to_match(dsw_path, ps.demPath, output_path='resamp.tif')
+    # plt.figure();plt.imshow(dsw,vmin=0,vmax=3);plt.title(str(0))
 
-def load_dsw(dsw_path):
-    ds =  rasterio.open(dsw_path)
-    array = ds.read().squeeze()
-    plt.figure();plt.imshow(array)
-    
-    
-def crop_rasters_to_bounds(dsw_path, dem_ds, minlon, minlat, maxlon, maxlat):
-    '''
-    Crop DSW image to same area as DEM
-    The output_tif raster is then resampled to match the dimensions of the dem raster.
-    '''
-    with rasterio.open(dsw_path) as output_tif:
-        # Transform the bounds to the CRS of the output TIF
-        bounds_transformed = transform_bounds(rasterio.crs.CRS.from_epsg(4326), output_tif.crs, minlon, minlat, maxlon, maxlat)
-        
-        # Compute the window corresponding to the transformed bounds
-        window = from_bounds(*bounds_transformed, output_tif.transform)
-        
-        # Crop the raster
-        output_tif_data = output_tif.read(window=window)
-
-    transform = rasterio.transform.from_bounds(minlon, minlat, maxlon, maxlat, dem_ds.width, dem_ds.height)
-    bounds_transformed = rasterio.transform.array_bounds(dem_ds.height, dem_ds.width, transform)
-    # Compute the window corresponding to the transformed bounds
-    window_dem = from_bounds(*bounds_transformed, dem_ds.transform)
-    
-    # Crop the DEM raster
-    dem = dem_ds.read(window=window_dem)
-    # If the cropped output and DEM data have different shapes, resample the output data
-    if output_tif_data.shape[1:] != dem.shape[1:]:
-        output_resampled = dem.copy()
-        reproject(
-            output_tif_data, 
-            output_resampled,
-            src_transform=rasterio.windows.transform(window, output_tif.transform),
-            src_crs=output_tif.crs,
-            dst_transform=rasterio.windows.transform(window_dem, dem_ds.transform),
-            dst_crs=dem_ds.crs,
-            resampling=Resampling.bilinear
-        )
-        output_tif_data = output_resampled
-
-    return output_tif_data, dem
-
-
-def extract_water_edge_elevation(dsw_path, dem_ds, ps, guess, plot_flag=True):
-    # Crop images around polygon bounds  
-    
-    # for i in range(10):
-    # dsw_path = dsw_paths[i]
-    
-    print('Cropping the images around the polygon...')
-    minlat, maxlat, minlon, maxlon = extract_bounds_from_wkt(ps.polygon,decimals=2)
-    dsw,dem = crop_rasters_to_bounds(dsw_path, dem_ds, minlon, minlat, maxlon, maxlat)
-    dsw =dsw[0,:,:]
-    dem =dem[0,:,:]
-
-    # plt.figure();plt.imshow(dsw,vmin=0,vmax=10);plt.title(str(i))
-
-
+    binary_dem = (dem == mode_value)
     binary_dsw = (dsw == 1) | (dsw == 2)
-    
     # plt.figure();plt.imshow(binary_dsw)
+    # plt.figure();plt.imshow(binary_dem)
     
-    minimumPixelsInRegion = 60
     # Remove small objects (i.e., small islands of zeros)
+    # This will remove islands that are smaller than 0.1% of the image.
+    minimumPixelsInRegion = .001 *(binary_dem.shape[0]*binary_dem.shape[1])
     cleaned_binary_dsw = remove_small_objects(binary_dsw, minimumPixelsInRegion, connectivity=1)
     inverse_cleaned_binary_dsw = ~cleaned_binary_dsw
     cleaned_inverse_dsw = remove_small_objects(inverse_cleaned_binary_dsw, minimumPixelsInRegion, connectivity=1)
@@ -294,7 +198,7 @@ def extract_water_edge_elevation(dsw_path, dem_ds, ps, guess, plot_flag=True):
     
         water_edge_elevations_rounded = np.round(water_edge_elevations)
         # exclude any values that are the exact value of the DEM water elevation (guess)
-        water_edge_elevations_rounded = water_edge_elevations_rounded[water_edge_elevations_rounded!=round(guess)]
+        water_edge_elevations_rounded = water_edge_elevations_rounded[water_edge_elevations_rounded!=round(mode_value)]
         values, counts = np.unique(water_edge_elevations_rounded.ravel(), return_counts=True)
         mode_elevation = values[np.argmax(counts)]
 
@@ -303,8 +207,8 @@ def extract_water_edge_elevation(dsw_path, dem_ds, ps, guess, plot_flag=True):
         # plt.plot(water_edge_elevations_rounded,'.')
         
         # Calculate the median elevation of the water's edge
-        median_elevation = np.median(water_edge_elevations[water_edge_elevations!=59])
-        std_elevation = np.nanstd(water_edge_elevations[water_edge_elevations!=59])
+        median_elevation = np.nanmedian(water_edge_elevations[water_edge_elevations!=mode_value])
+        std_elevation = np.nanstd(water_edge_elevations[water_edge_elevations!=mode_value])
 
         edge_line = np.zeros(edge_mask.shape) *np.nan
         edge_line[edge_mask] = 1
@@ -374,27 +278,54 @@ def main(plot_flag = False):
     if ps.demPath == 'none':
         demBounds, ps.demPath = dlDEM(ps)
     
-    ds = rasterio.open(ps.demPath)
-    dem = ds.read().squeeze()
-    dem[dem<0] = np.nan
-    plt.figure();plt.imshow(dem)
+
+    # reproject DEM to 4326 and update yaml file with that path
+    with rasterio.open(ps.demPath) as dem_src:
+        epsg_dem = dem_src.crs.to_string()
+        
+    if not epsg_dem == 'EPSG:4326':
+        print('Reprojecting the DEM to EPSG:4326')
+        dem_path_4326 = 'DEM/dem_4326.tif'
+        utils.reproject_raster(ps.demPath, dem_path_4326, output_epsg='EPSG:4326')
+        ps.demPath = dem_path_4326
+        utils.update_yaml_key('params.yaml', 'demPath', dem_path_4326)
+        print('Updating demPath in params.yaml with reprojected dem')
     
-    dem,dem_ds = read_crop_DEM(ps)
-    dem = dem[0,:,:]
-    plt.figure();plt.imshow(dem,vmin=55,vmax=200);plt.title('DEM')
     
-    # Find the elevation of water in the DEM and make a guess water mask
-    values, counts = np.unique(dem.ravel(), return_counts=True)
+    # Now crop the DEM
+    dem_cropped_path = 'DEM/dem_4326_cropped.tif' 
+    if not os.path.isfile(dem_cropped_path):
+        print('Cropping the images around the polygon...')
+        minlat, maxlat, minlon, maxlon = extract_bounds_from_wkt(ps.polygon,decimals=3)
+        dem = utils.crop_geotiff(ps.demPath,dem_cropped_path, minlon, minlat, maxlon, maxlat) # might not work if bounds are outside of the image bounds
+        ps.demPath = dem_cropped_path
+        utils.update_yaml_key('params.yaml', 'demPath', dem_cropped_path)
+        print('Updating demPath in params.yaml with cropped dem')
+    else:
+        dem = load_gt(dem_cropped_path)
+    
+    
+    # Load the DEM 
+    dem[dem<0] = np.nan  
+    
+    non_nan_dem = dem[~np.isnan(dem)]
+    values, counts = np.unique(non_nan_dem.ravel(), return_counts=True)
     mode_value = values[np.argmax(counts)]
-    guess = dem==mode_value
-    plt.figure();plt.imshow(guess);plt.title('Water mask initial guess')
+    guess = dem == mode_value
+    
+    fig,ax = plt.subplots(2,1,figsize=(7,8))
+    ax[0].imshow(dem);ax[0].set_title('DEM')
+    ax[1].imshow(guess);ax[1].set_title('Water mask initial guess')
+    plt.show()
     
     elevations_medians = []
     elevations_modes = []
-
+    elevations_stds = []
     for dsw_path in dsw_paths:
-        median_elevation,mode_elevation,std_elevation = extract_water_edge_elevation(dsw_path, dem_ds, ps, guess, plot_flag=plot_flag)
-        print(f"The estimated water surface elevation is: {mode_elevation:.5f} meters.")
+        median_elevation,mode_elevation,std_elevation = extract_water_edge_elevation(dsw_path,dem, ps, mode_value, plot_flag=plot_flag)
+        print(f"The mode water surface elevation is: {mode_elevation:.5f} meters.")
+        print(f"The median water surface elevation is: {median_elevation:.5f} meters.")
+
         elevations_medians.append(median_elevation)
         elevations_modes.append(mode_elevation)
     

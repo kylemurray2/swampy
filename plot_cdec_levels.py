@@ -36,13 +36,14 @@ def clean_convert(column):
 
 ps = config.getPS()
 date_objects,elevations_medians,elevations_modes, elevations_std = water_elevation.main()
+
 elevations_medians = np.asarray(elevations_medians)
 elevations_modes = np.asarray(elevations_modes)
 elevations_std = np.asarray(elevations_std)
 
 # Remove outliers
-elevations_medians = remove_outliers(elevations_medians,n_sigma=3)
-elevations_modes = remove_outliers(elevations_modes,n_sigma=3)
+elevations_medians_clean = remove_outliers(elevations_medians,n_sigma=3)
+elevations_modes_clean = remove_outliers(elevations_modes,n_sigma=3)
 
 # Get measurements and clean up data
 data = pd.read_csv(ps.cdec_levels_csv)
@@ -68,8 +69,8 @@ plt.plot(data['Datetime'], data['RES ELE FEET'], '.')
 #         plt.axvline(x=row['Datetime'], color='green', linestyle='--', alpha=0.7)
 # plt.errorbar(x, y, yerr=yerr, fmt='o', color='blue', ecolor='red', capsize=5)
 
-plt.errorbar(date_objects, elevations_medians+5, yerr=elevations_std, fmt='o',label='median',capsize=5,color='green',ecolor='red')
-# plt.plot(date_objects, elevations_modes, '.',label='mode')
+plt.errorbar(date_objects, elevations_medians, yerr=elevations_std, fmt='o',label='median',capsize=5,color='green',ecolor='red')
+plt.errorbar(date_objects, elevations_modes, yerr=elevations_std, fmt='o',label='mode',capsize=5,color='orange',ecolor='red')
 
 plt.title('Time Series of Water Levels')
 plt.xlabel('Datetime')
