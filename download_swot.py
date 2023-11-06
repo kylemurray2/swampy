@@ -1,10 +1,15 @@
 '''
 Download SWOT data from podaac
 
+From example
+https://podaac.github.io/tutorials/notebooks/SearchDownload_SWOTviaCMR.html
+
 Each dataset has it’s own unique collection ID. For the 
 SWOT_SIMULATED_NA_CONTINENT_L2_HR_RIVERSP_V1 dataset, we find the collection ID
 here: https://podaac.jpl.nasa.gov/dataset/SWOT_SIMULATED_NA_CONTINENT_L2_HR_RIVERSP_V1
 
+Other resources for swot:
+    https://github.com/SWOT-community/SWOT-OpenToolkit/tree/main
 '''
 
 import requests,json,glob,os,zipfile 

@@ -155,10 +155,12 @@ def extract_water_edge_elevation(dsw_path,dem, ps, mode_value, plot_flag=True):
     '''
     
     print('resampling DSW to the DEM grid')
-    dsw = utils.resample_to_match(dsw_path, ps.demPath, output_path='resamp.tif')
+    
+    resampled_path = dsw_path.replace('mosaic.tif', 'mosaic_resampled.tif')
+    dsw = utils.resample_to_match(dsw_path, ps.demPath, output_path=resampled_path)
     # plt.figure();plt.imshow(dsw,vmin=0,vmax=3);plt.title(str(0))
 
-    binary_dem = (dem == mode_value)
+    binary_dem = (dem >= (mode_value - 0.2)) & (dem <= (mode_value + 0.2))
     binary_dsw = (dsw == 1) | (dsw == 2)
     # plt.figure();plt.imshow(binary_dsw)
     # plt.figure();plt.imshow(binary_dem)
@@ -228,6 +230,8 @@ def extract_water_edge_elevation(dsw_path,dem, ps, mode_value, plot_flag=True):
             plt.imshow(dem2,cmap='magma')
             plt.title('DEM with water edge')
             plt.show()
+            
+            plt.figure()
     
     else:
         print(dsw_path + ' failed')
@@ -256,12 +260,9 @@ def convert_to_datetime(date_str):
     return datetime.strptime(date_str, '%Y%m%d').date()
 
 
-
-
 def main(plot_flag = False):
 
     ps = config.getPS()
-        
     date_dirs = glob.glob(ps.dataDir + '/2???????')
     date_dirs.sort()
     dsw_paths = glob.glob(ps.dataDir + '/2???????/mosaic.tif')
@@ -297,13 +298,12 @@ def main(plot_flag = False):
     if not os.path.isfile(dem_cropped_path):
         print('Cropping the images around the polygon...')
         minlat, maxlat, minlon, maxlon = extract_bounds_from_wkt(ps.polygon,decimals=3)
-        dem = utils.crop_geotiff(ps.demPath,dem_cropped_path, minlon, minlat, maxlon, maxlat) # might not work if bounds are outside of the image bounds
+        utils.crop_geotiff(ps.demPath,dem_cropped_path, minlon, minlat, maxlon, maxlat) # might not work if bounds are outside of the image bounds
         ps.demPath = dem_cropped_path
         utils.update_yaml_key('params.yaml', 'demPath', dem_cropped_path)
         print('Updating demPath in params.yaml with cropped dem')
-    else:
-        dem = load_gt(dem_cropped_path)
-    
+
+    dem = load_gt(dem_cropped_path)
     
     # Load the DEM 
     dem[dem<0] = np.nan  
@@ -321,6 +321,7 @@ def main(plot_flag = False):
     elevations_medians = []
     elevations_modes = []
     elevations_stds = []
+    
     for dsw_path in dsw_paths:
         median_elevation,mode_elevation,std_elevation = extract_water_edge_elevation(dsw_path,dem, ps, mode_value, plot_flag=plot_flag)
         print(f"The mode water surface elevation is: {mode_elevation:.5f} meters.")
@@ -328,7 +329,8 @@ def main(plot_flag = False):
 
         elevations_medians.append(median_elevation)
         elevations_modes.append(mode_elevation)
-    
+        elevations_stds.append(std_elevation)
+        
     plt.figure()
     plt.plot(date_objects, elevations_medians, '.',label='median')
     plt.plot(date_objects, elevations_modes, '.',label='mode')
@@ -344,7 +346,7 @@ if __name__ == '__main__':
     '''
     Main driver.
     '''
-    main()
+    # main()
 
 # # Open the GeoTIFF file
 # with rasterio.open(dsw_path) as src:

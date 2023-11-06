@@ -58,19 +58,13 @@ data['Datetime'] = pd.to_datetime(data['DATE / TIME (PST)'])
 data['RES ELE FEET'][data['RES ELE FEET']==0] = np.nan
 data['RES ELE FEET']*=.3048 # feet to meters
 
+offset = 5
 
 # Plotting
 plt.figure(figsize=(10, 6))
 plt.plot(data['Datetime'], data['RES ELE FEET'], '.')
-
-# # Draw a vertical line where 'Amount Diverted' is nonzero
-# for index, row in data.iterrows():
-#     if abs(row['Amount Diverted (AF)']) > 500:
-#         plt.axvline(x=row['Datetime'], color='green', linestyle='--', alpha=0.7)
-# plt.errorbar(x, y, yerr=yerr, fmt='o', color='blue', ecolor='red', capsize=5)
-
-plt.errorbar(date_objects, elevations_medians, yerr=elevations_std, fmt='o',label='median',capsize=5,color='green',ecolor='red')
-plt.errorbar(date_objects, elevations_modes, yerr=elevations_std, fmt='o',label='mode',capsize=5,color='orange',ecolor='red')
+plt.errorbar(date_objects, elevations_medians+offset, yerr=elevations_std, fmt='o',label='median',capsize=5,color='green',ecolor='red')
+plt.errorbar(date_objects, elevations_modes+offset, yerr=elevations_std, fmt='o',label='mode',capsize=5,color='orange',ecolor='red')
 
 plt.title('Time Series of Water Levels')
 plt.xlabel('Datetime')
