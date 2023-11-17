@@ -1,6 +1,9 @@
 # SWAMPy  
 Surface Water Anyalysis Modules in Python   
-version 0.1  
+version 0.1    
+
+** Alpha version/under development/experimental **  
+** please contribute if you are interested in helping develop these tools **
 
 Basic tools designed to work with JPL OPERA Dynamic Surface Water eXtent (DSWx) products
 https://www.jpl.nasa.gov/go/opera/products/dswx-product-suite
