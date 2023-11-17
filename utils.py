@@ -9,7 +9,7 @@ extra functions for swampy
 """
 
 import numpy as np
-from matplotlib import pyplot as plt
+#from matplotlib import pyplot as plt
 import os,re
 
 
@@ -81,7 +81,6 @@ def reproject_raster(input_path, output_path, output_epsg='EPSG:4326'):
     print(f"Reprojected raster saved to {output_path}.")
 
 
-
 def resample_to_match(img_path, reference_path, output_path=None):
     """
     Resample the image GeoTIFF to match the grid of the reference GeoTIFF and save 
@@ -90,7 +89,6 @@ def resample_to_match(img_path, reference_path, output_path=None):
     
     import rasterio
     from rasterio.warp import reproject, Resampling
-    import numpy as np
     
     with rasterio.open(img_path) as dsw_src, rasterio.open(reference_path) as dem_src:
         # Read data from image and metadata from reference

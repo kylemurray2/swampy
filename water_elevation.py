@@ -3,6 +3,7 @@
 """
 Created on Wed Sep 27 14:12:46 2023
 
+-Works with LIDAR DEM, or 
 -Download Copernicus DEM if needed
 -Read the DSW image and DEM rasters.
 -Create a binary mask from the DSW raster where there is water.
@@ -243,14 +244,8 @@ def extract_water_edge_elevation(dsw_path,dem, ps, mode_value, plot_flag=True):
 def convert_to_decimal_year(date_str):
     """Convert a YYYYMMDD string to a decimal year."""
     date_obj = datetime.strptime(date_str, '%Y%m%d')
-    
-    # Start of the year
     start_of_year = datetime(date_obj.year, 1, 1)
-    
-    # Start of the next year
     start_of_next_year = datetime(date_obj.year + 1, 1, 1)
-    
-    # Compute the fractional year
     fraction_passed = (date_obj - start_of_year) / (start_of_next_year - start_of_year)
     
     return date_obj.year + fraction_passed
@@ -293,7 +288,7 @@ def main(plot_flag = False):
         print('Updating demPath in params.yaml with reprojected dem')
     
     
-    # Now crop the DEM
+    # Crop the DEM
     dem_cropped_path = 'DEM/dem_4326_cropped.tif' 
     if not os.path.isfile(dem_cropped_path):
         print('Cropping the images around the polygon...')
@@ -303,11 +298,10 @@ def main(plot_flag = False):
         utils.update_yaml_key('params.yaml', 'demPath', dem_cropped_path)
         print('Updating demPath in params.yaml with cropped dem')
 
-    dem = load_gt(dem_cropped_path)
     
     # Load the DEM 
+    dem = load_gt(dem_cropped_path)
     dem[dem<0] = np.nan  
-    
     non_nan_dem = dem[~np.isnan(dem)]
     values, counts = np.unique(non_nan_dem.ravel(), return_counts=True)
     mode_value = values[np.argmax(counts)]
