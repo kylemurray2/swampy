@@ -33,3 +33,5 @@ water_elevation.py
    > For each date, estimate the elevation of the water based on the surface   
     water extent and where the edges intersect a DEM.  
     plots a time series of estimated surface elevations  
+> 
+![image](https://github.com/kylemurray2/swampy/assets/8814635/f33bf673-b87d-4d4a-849f-89ae18db8261)
