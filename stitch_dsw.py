@@ -3,7 +3,9 @@
 """
 Created on Fri Sep 22 16:06:50 2023
 
-
+Sorts tif files into YYYYMMDD/EPSG directories
+Stitches all images from each date together
+Outputs mosaic.tif in each date directory
 
 @author: km
 """
@@ -49,8 +51,6 @@ def reprojectDSWx(epsg_code, file_batch, output_filename, dswx_colormap, resolut
     it to EPSG:4326.
     '''
     dst_crs = 'EPSG:4326'
-    
-    # Mosaic the file_batch 
     merged_img, merged_transform = merge(file_batch, method='min')
     merged_output_bounds = rasterio.transform.array_bounds(merged_img.shape[-2], merged_img.shape[-1] , merged_transform)
 
@@ -104,9 +104,7 @@ def main():
     
     
     for date_dir in date_dirs:
-    
-        # os.system('mv ' + date_dir + '/final_mosaic.tif ' + date_dir + '/mosaic.tif')
-        
+           
         files_by_crs = organize_files(ps,date_dir)
         # Get a list of the tif files
         file_list = glob.glob(os.path.join(date_dir, 'EPSG*','*_WTR.tif'))
@@ -158,7 +156,6 @@ def main():
                     with Pool() as pool:
                         output_files = pool.starmap(reprojectDSWx, function_inputs)
                         
-                # Now get the mosaic chunks from outdir/EPSG:????/mosaics/*tif and merge those:    
                 mosaic_list = glob.glob(os.path.join(date_dir,'EPSG*','mosaics','*tif'))
                 reprojectDSWx('EPSG:4326', mosaic_list, Path(final_mosaic_path / 'mosaic.tif'),dswx_colormap)
 

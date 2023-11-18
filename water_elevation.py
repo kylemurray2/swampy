@@ -27,6 +27,7 @@ from rasterio.windows import from_bounds
 from rasterio.warp import transform_bounds
 from skimage.morphology import remove_small_objects
 from datetime import datetime
+from scipy.ndimage import binary_dilation,generate_binary_structure
 
 from osgeo import gdal, osr
 
@@ -146,23 +147,72 @@ def load_gt(dsw_path):
         array = ds.read().squeeze()
     return array
 
+def find_land_adjacent_to_water(raster):
+    """
+    Function to find the land pixels that are directly adjacent to water pixels in a single-band raster.
+    
+    Parameters:
+    raster (numpy array): A numpy array representing the raster with land, water, and clouds.
+    
+    Returns:
+    mask: True where a pixel classified as land is touching a pixel classified as water
+    """
+    # Create masks for land and water
+    land_mask = raster == 0
+    water_mask = raster == 1
+    other_mask = raster == 5
+
+    # Dilate the water mask to include potential adjacent land pixels
+    dilated_water_mask = binary_dilation(water_mask)
+    
+    # There is an artifact around some of the clouds, where they are defined as 
+    # water for 1 or 2 pixels on their edges. We can grow the clouds a few pixels
+    # to make sure those artifacts are not included in the edge detection.
+    n_pixels = 7  # Example for 2 pixels dilation
+    structuring_element = generate_binary_structure(2, 1)  # 2D cross (1-connectivity)
+    dilated_other_mask = binary_dilation(other_mask, structure=structuring_element, iterations=n_pixels)
+    # plt.figure();plt.imshow(dilated_water_mask[4550:4660,7200:7350])
+    
+    # Find the intersection of the original land mask with the dilated water mask
+    # This will give us land pixels that are adjacent to water pixels
+    land_adjacent_to_water = land_mask & dilated_water_mask & ~dilated_other_mask
+    
+    # plt.figure();plt.imshow(land_adjacent_to_water[4550:4660,7200:7350])
+
+    # Make sure we don't include the land pixels that are under the dilated water mask
+    # This is done by subtracting the original water mask from the result
+    land_adjacent_to_water = land_adjacent_to_water & ~water_mask
+
+    return land_adjacent_to_water
 
 
-def extract_water_edge_elevation(dsw_path,dem, ps, mode_value, plot_flag=True):
+
+def extract_water_edge_elevation(dsw_path,dem, ps, DEM_water_elevation, plot_flag=True):
     '''
     Resample DSW image to DEM grid,
+    Remove small groups of pixels
     Find the edge of the water,
     Find where the edge intersects the DEM and average those elevations
     '''
     
-    print('resampling DSW to the DEM grid')
-    
     resampled_path = dsw_path.replace('mosaic.tif', 'mosaic_resampled.tif')
-    dsw = utils.resample_to_match(dsw_path, ps.demPath, output_path=resampled_path)
-    # plt.figure();plt.imshow(dsw,vmin=0,vmax=3);plt.title(str(0))
+    if not os.path.isfile(resampled_path):
+        print('resampling DSW to the DEM grid')
+        dsw = utils.resample_to_match(dsw_path, ps.demPath, output_path=resampled_path)
+    else:
+        print('Using existing resampled DSW')
+        dsw = load_gt(resampled_path)
+    dsw=dsw.astype(int)
 
-    binary_dem = (dem >= (mode_value - 0.2)) & (dem <= (mode_value + 0.2))
+    # plt.figure();plt.imshow(dsw,vmin=0,vmax=3)
+    # plt.figure();plt.imshow(cleaned_dsw,vmin=0,vmax=3)
+
+    # We need to make sure we only extract land/water intersections and not cloud/land etc.
+    
+    # Start with binary image of water and other
+    binary_dem = (dem >= (DEM_water_elevation - 0.2)) & (dem <= (DEM_water_elevation + 0.2))
     binary_dsw = (dsw == 1) | (dsw == 2)
+    binary_dsw[np.where((dsw !=0) & (dsw !=1))] = np.nan
     # plt.figure();plt.imshow(binary_dsw)
     # plt.figure();plt.imshow(binary_dem)
     
@@ -174,6 +224,8 @@ def extract_water_edge_elevation(dsw_path,dem, ps, mode_value, plot_flag=True):
     cleaned_inverse_dsw = remove_small_objects(inverse_cleaned_binary_dsw, minimumPixelsInRegion, connectivity=1)
     binary_dsw_clean = ~cleaned_inverse_dsw
     
+ 
+    
     # plt.figure();plt.imshow(binary_dsw_clean)
 
     
@@ -181,58 +233,61 @@ def extract_water_edge_elevation(dsw_path,dem, ps, mode_value, plot_flag=True):
                 
         # plt.figure();plt.imshow(dsw);plt.title('binary_dsw')
         # plt.figure();plt.imshow(binary_dsw_clean);plt.title('binary_dsw_clean')
-    
-        
         # Create a binary mask for DSW == 1
-        water_mask = binary_dsw_clean == 1
-    
-        # Find the edges of the water mask using convolution
-        kernel = np.array([
-            [-1, -1, -1],
-            [-1,  8, -1],
-            [-1, -1, -1]
-        ])
-            
-        edges = convolve2d(water_mask, kernel, mode='same', boundary='symm')
-        edge_mask = edges > 0
+        # water_mask = dsw_tri == 1
+        # # Find the edges of the water mask using convolution
+        # kernel = np.array([
+        #     [-1, -1, -1],
+        #     [-1,  8, -1],
+        #     [-1, -1, -1]
+        # ])
+        # edges = convolve2d(water_mask, kernel, mode='same', boundary='symm')
+        # edge_mask = edges > 0
+        
+        # Now add back in the clouds so we can make sure not to find water/cloud boundaries
+        dsw_tri =np.zeros(binary_dsw_clean.shape)
+        dsw_tri[binary_dsw_clean] = 1
+        dsw_tri[~np.isin(dsw, [0, 1, 2, 3])] = 5 # dsw_tri is 0:land 1:water and 5:other
+        # plt.figure();plt.imshow(dsw_tri,vmin=0,vmax=5)
 
+        edge_mask = find_land_adjacent_to_water(dsw_tri)
+        minpix = .001* np.sum(edge_mask)
+        edge_mask = remove_small_objects(edge_mask, minpix, connectivity=1)
         # Extract the elevation values from the DEM where the edge mask is True
         water_edge_elevations = dem[edge_mask]
-    
         water_edge_elevations_rounded = np.round(water_edge_elevations)
         # exclude any values that are the exact value of the DEM water elevation (guess)
-        water_edge_elevations_rounded = water_edge_elevations_rounded[water_edge_elevations_rounded!=round(mode_value)]
+        water_edge_elevations_rounded = water_edge_elevations_rounded[water_edge_elevations_rounded!=round(DEM_water_elevation)]
         values, counts = np.unique(water_edge_elevations_rounded.ravel(), return_counts=True)
-        mode_elevation = values[np.argmax(counts)]
-
         
-        # plt.figure()
-        # plt.plot(water_edge_elevations_rounded,'.')
-        
-        # Calculate the median elevation of the water's edge
-        median_elevation = np.nanmedian(water_edge_elevations[water_edge_elevations!=mode_value])
-        std_elevation = np.nanstd(water_edge_elevations[water_edge_elevations!=mode_value])
-
-        edge_line = np.zeros(edge_mask.shape) *np.nan
-        edge_line[edge_mask] = 1
+        if len(counts) > 1:
+            mode_elevation = values[np.argmax(counts)]
+            # Calculate the median elevation of the water's edge
+            median_elevation = np.nanmedian(water_edge_elevations[water_edge_elevations!=DEM_water_elevation])
+            std_elevation = np.nanstd(water_edge_elevations[water_edge_elevations!=DEM_water_elevation])
     
-        dem2= dem.copy()
-        dem2[edge_line==1] = np.nan
-
-        if plot_flag:
-    
-            fig,ax = plt.subplots(2,1)
-            ax[0].imshow(binary_dsw,cmap='magma');ax[0].set_title('Original water mask')
-            ax[1].imshow(binary_dsw_clean,cmap='magma');ax[1].set_title('Cleaned water mask')
-            plt.title(dsw_path)
-            plt.show()
+            edge_line = np.zeros(edge_mask.shape) *np.nan
+            edge_line[edge_mask] = 1
         
-            plt.figure()
-            plt.imshow(dem2,cmap='magma')
-            plt.title('DEM with water edge')
-            plt.show()
+            dem2= dem.copy()
+            dem2[edge_line==1] = np.nan
             
-            plt.figure()
+            if plot_flag:
+        
+                fig,ax = plt.subplots(2,1)
+                ax[0].imshow(binary_dsw,cmap='magma');ax[0].set_title('Original water mask')
+                ax[1].imshow(binary_dsw_clean,cmap='magma');ax[1].set_title('Cleaned water mask')
+                plt.title(dsw_path)
+                plt.show()
+            
+                plt.figure()
+                plt.imshow(dem2,cmap='magma')
+                plt.title('DEM with water edge')
+                plt.show()
+                
+        else:
+            print(dsw_path + ' failed')
+            median_elevation,mode_elevation,std_elevation = np.nan,np.nan,np.nan
     
     else:
         print(dsw_path + ' failed')
@@ -304,20 +359,22 @@ def main(plot_flag = False):
     dem[dem<0] = np.nan  
     non_nan_dem = dem[~np.isnan(dem)]
     values, counts = np.unique(non_nan_dem.ravel(), return_counts=True)
-    mode_value = values[np.argmax(counts)]
-    guess = dem == mode_value
+    DEM_water_elevation = values[np.argmax(counts)]
+    guess = dem == DEM_water_elevation
     
+    vmin = DEM_water_elevation -30
+    vmax = DEM_water_elevation + 30
     fig,ax = plt.subplots(2,1,figsize=(7,8))
-    ax[0].imshow(dem);ax[0].set_title('DEM')
+    ax[0].imshow(dem,vmin=vmin,vmax=vmax,cmap='magma');ax[0].set_title('DEM')
     ax[1].imshow(guess);ax[1].set_title('Water mask initial guess')
     plt.show()
     
     elevations_medians = []
     elevations_modes = []
     elevations_stds = []
-    
+    # dsw_path = './data/20230430/mosaic.tif'
     for dsw_path in dsw_paths:
-        median_elevation,mode_elevation,std_elevation = extract_water_edge_elevation(dsw_path,dem, ps, mode_value, plot_flag=plot_flag)
+        median_elevation,mode_elevation,std_elevation = extract_water_edge_elevation(dsw_path,dem, ps, DEM_water_elevation, plot_flag=plot_flag)
         print(f"The mode water surface elevation is: {mode_elevation:.5f} meters.")
         print(f"The median water surface elevation is: {median_elevation:.5f} meters.")
 
@@ -334,7 +391,7 @@ def main(plot_flag = False):
     plt.legend()
     plt.show()
     
-    return date_objects,elevations_medians,elevations_modes,std_elevation
+    return date_objects,elevations_medians,elevations_modes,std_elevation, DEM_water_elevation
     
 if __name__ == '__main__':
     '''
