@@ -34,4 +34,4 @@ water_elevation.py
     water extent and where the edges intersect a DEM.  
     plots a time series of estimated surface elevations
 > 
-![image](https://github.com/kylemurray2/swampy/assets/8814635/f33bf673-b87d-4d4a-849f-89ae18db8261)
+![image](https://github.com/kylemurray2/swampy/assets/8814635/f331b9ca-a7ba-45af-bbb4-0af9d15b65e7)
