@@ -265,7 +265,6 @@ def extract_water_edge_elevation(dsw_path,dem, ps, DEM_water_elevation, plot_fla
             # Calculate the median elevation of the water's edge
             median_elevation = np.nanmedian(water_edge_elevations[water_edge_elevations!=DEM_water_elevation])
             std_elevation = np.nanstd(water_edge_elevations[water_edge_elevations!=DEM_water_elevation])
-    
             edge_line = np.zeros(edge_mask.shape) *np.nan
             edge_line[edge_mask] = 1
         
@@ -391,7 +390,7 @@ def main(plot_flag = False):
     plt.legend()
     plt.show()
     
-    return date_objects,elevations_medians,elevations_modes,std_elevation, DEM_water_elevation
+    return date_objects,elevations_medians,elevations_modes,elevations_stds, DEM_water_elevation
     
 if __name__ == '__main__':
     '''

@@ -129,7 +129,8 @@ def main():
         else:
             if os.path.isfile( os.path.join(str(final_mosaic_path),'mosaic.tif')):
                 print('Final stitched image already exists for ' + link_name)
-            else:                
+            else:           
+                print('Reprojecting and Stitching ' + date_dir)
                 # Get a colormap from one of the files
                 with rasterio.open(file_list[0]) as ds:
                     dswx_colormap = ds.colormap(1)
