@@ -74,7 +74,7 @@ offset_mode = 2
 # Plotting
 plt.figure(figsize=(10, 6))
 plt.plot(data['Datetime'], data['RES ELE FEET'], '.')
-plt.errorbar(elevation_data_dict['date_objects'], elevation_data_dict['elevations_medians']+offset, yerr=elevation_data_dict['elevations_std'], fmt='o',label='median',capsize=5,color='green',ecolor='red')
+plt.errorbar(elevation_data_dict['date_objects'], elevation_data_dict['elevations_medians']+offset, yerr=elevation_data_dict['elevations_std'], fmt='o',label='median',capsize=5,color='green',ecolor='gray',linewidth=.5)
 # plt.errorbar(elevation_data_dict['date_objects'], elevation_data_dict['elevations_modes']+offset_mode, yerr=elevation_data_dict['elevations_std'], fmt='o',label='mode',capsize=5,color='orange',ecolor='red')
 plt.axhline(y=DEM_water_elevation,linestyle='-')
 plt.title('Time Series of Water Levels')

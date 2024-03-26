@@ -28,7 +28,9 @@ from rasterio.warp import transform_bounds
 from skimage.morphology import remove_small_objects
 from datetime import datetime
 from scipy.ndimage import binary_dilation,generate_binary_structure
-
+import rasterio
+from rasterio.features import geometry_mask
+from shapely.wkt import loads
 from osgeo import gdal, osr
 
 
@@ -204,18 +206,17 @@ def extract_water_edge_elevation(dsw_path,dem, ps, DEM_water_elevation, plot_fla
         dsw = load_gt(resampled_path)
     dsw=dsw.astype(int)
 
-    # plt.figure();plt.imshow(dsw,vmin=0,vmax=3)
-    # plt.figure();plt.imshow(cleaned_dsw,vmin=0,vmax=3)
+    # plt.figure();plt.imshow(dsw,vmin=0,vmax=3);plt.title('DSW raw')
 
-    # We need to make sure we only extract land/water intersections and not cloud/land etc.
+    # First convert DSW to binary array (water and no water)
     
-    # Start with binary image of water and other
     binary_dem = (dem >= (DEM_water_elevation - 0.2)) & (dem <= (DEM_water_elevation + 0.2))
+    # plt.figure();plt.imshow(binary_dem);plt.title('water estimate from DEM +/- 0.2 m')
+
+    # Start with binary image of water and other and then remove any small objects
     binary_dsw = (dsw == 1) | (dsw == 2)
-    binary_dsw[np.where((dsw !=0) & (dsw !=1))] = np.nan
-    # plt.figure();plt.imshow(binary_dsw)
-    # plt.figure();plt.imshow(binary_dem)
-    
+    # binary_dsw[np.where((dsw !=0) & (dsw !=1))] = np.nan
+    # plt.figure();plt.imshow(binary_dsw);plt.title('water estimate from DSW')
     # Remove small objects (i.e., small islands of zeros)
     # This will remove islands that are smaller than 0.1% of the image.
     minimumPixelsInRegion = .001 *(binary_dem.shape[0]*binary_dem.shape[1])
@@ -224,11 +225,11 @@ def extract_water_edge_elevation(dsw_path,dem, ps, DEM_water_elevation, plot_fla
     cleaned_inverse_dsw = remove_small_objects(inverse_cleaned_binary_dsw, minimumPixelsInRegion, connectivity=1)
     binary_dsw_clean = ~cleaned_inverse_dsw
     
- 
-    
+    # plt.figure();plt.imshow(cleaned_binary_dsw);plt.title('cleaned_binary_dsw')
+    # plt.figure();plt.imshow(binary_dsw_clean);plt.title('binary_dsw_clean')
     # plt.figure();plt.imshow(binary_dsw_clean)
 
-    
+    # Now if there is water in our image, we will find the shore line
     if len(np.unique(binary_dsw_clean))==2:
                 
         # plt.figure();plt.imshow(dsw);plt.title('binary_dsw')
@@ -348,6 +349,18 @@ def main(plot_flag = False):
         print('Cropping the images around the polygon...')
         minlat, maxlat, minlon, maxlon = extract_bounds_from_wkt(ps.polygon,decimals=3)
         utils.crop_geotiff(ps.demPath,dem_cropped_path, minlon, minlat, maxlon, maxlat) # might not work if bounds are outside of the image bounds
+        
+        src= rasterio.open(dem_cropped_path) 
+        meta = src.meta
+        image_data = src.read(1)  # Read the first band; adjust if necessary
+        polygon = loads(ps.polygon)
+        mask = geometry_mask([polygon], transform=src.transform, invert=True, out_shape=src.shape)
+        image_data[~mask] = np.nan 
+        # plt.figure();plt.imshow(image_data,vmin=0,vmax=1)
+        # Write the modified data back to the same file
+        with rasterio.open(dem_cropped_path, 'w', **meta) as dst:
+            dst.write(image_data,1)
+        
         ps.demPath = dem_cropped_path
         utils.update_yaml_key('params.yaml', 'demPath', dem_cropped_path)
         print('Updating demPath in params.yaml with cropped dem')
@@ -396,7 +409,7 @@ if __name__ == '__main__':
     '''
     Main driver.
     '''
-    # main()
+    main()
 
 # # Open the GeoTIFF file
 # with rasterio.open(dsw_path) as src:

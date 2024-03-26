@@ -11,7 +11,7 @@ Download DSWx data
 from pystac_client import Client  
 from shapely import wkt
 import os, json, requests, re, glob
-from datetime import datetime
+from datetime import datetime, timedelta
 from swampy import config
 from urllib.request import urlopen
 import concurrent.futures
@@ -23,9 +23,9 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import numpy as np
 from urllib.error import URLError
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 nproc = int(os.cpu_count()-1)
-
 
 def filter_by_cloud_cover(item, threshold=10):
     '''
@@ -39,15 +39,8 @@ def filter_by_cloud_cover(item, threshold=10):
         print("Error fetching URL:", xml_url)
         return False
 
-    c_cover = -1
-    for attribute in data_json['AdditionalAttributes']:
-        if attribute['Name'] == 'PercentCloudCover':
-            c_cover = int(attribute['Values'][0])
-            break
+    c_cover = data_json['CloudCover']
 
-    if c_cover == -1:
-        print("PercentCloudCover not found in metadata for URL:", xml_url)
-        return False
 
     return c_cover <= threshold
 
@@ -56,44 +49,131 @@ def return_granule(item):
     return item.assets['0_B01_WTR'].href
     
     
+# ps = config.getPS()
+
+def search_dswx_data(start_stop_tuple,intersects_geometry,cloudy_threshold):
+    start, stop = start_stop_tuple
+    
+
+    
+    # Setup STAC API
+    stac = 'https://cmr.earthdata.nasa.gov/cloudstac/'  # CMR-STAC API Endpoint
+    api = Client.open(f'{stac}POCLOUD/')
+    collections = ['OPERA_L3_DSWX-HLS_PROVISIONAL_V1']
+    
+    # Define search parameters
+    search_params = {
+        "collections": collections,
+        "intersects": intersects_geometry,
+        "datetime": [start, stop],
+        "max_items": 100000
+    }
+    
+    print(f"Connecting to API for period {start} to {stop}...")
+    search_dswx = api.search(**search_params)
+    
+    # Return the collected items
+    # Filter cloudy days
+    print("Filtering cloudy days > " + str(cloudy_threshold) + "%...")
+    filtered_items = list(filter(lambda item: filter_by_cloud_cover(item, threshold=cloudy_threshold), search_dswx.item_collection()))
+    print(str(len(list(search_dswx.item_collection()))) + ' items were found.')
+    print(str(len(filtered_items)) + ' items meet the cloud threshold')
+    filtered_urls = list(map(return_granule, filtered_items))
+    
+    return filtered_urls, list(search_dswx.items())
+
+
+
+    
 def searchDSWx(ps):
     '''
     Searches DSWx data given polygon AOI and date range. 
+    splits the date range into 10 chunks, and accesses data in parallel
     Returns:
         filtered_urls: urls to the data from sparse-cloud days
         dswx_data_df: pandas dataframe for all search results
     '''
-
-    # convert to the datetime format
-    start_date = datetime(int(ps.date_start[0:4]), int(ps.date_start[4:6]), int(ps.date_start[6:8]))    
-    stop_date = datetime(int(ps.date_stop[0:4]), int(ps.date_stop[4:6]), int(ps.date_stop[6:8]))  
-            
+    
+    
+    already_dl_dates = glob.glob('data/2???????')
+    if len(already_dl_dates)>0:
+        already_dl_dates.sort()
+        start_date = datetime(int(ps.date_start[0:4]), int(ps.date_start[4:6]), int(ps.date_start[6:8]))   
+        print(f'already found the following dates { already_dl_dates}.  Setting new start date to {start_date}.')
+    else:
+        start_date = datetime(int(ps.date_start[0:4]), int(ps.date_start[4:6]), int(ps.date_start[6:8]))    
+    
+    stop_date =  datetime.today()  
+    
     # Convert the wkt polygon to a Shapely Polygon
     aoi = wkt.loads(ps.polygon)
     intersects_geometry = aoi.__geo_interface__
     
-    # Search data through CMR-STAC API
-    stac = 'https://cmr.earthdata.nasa.gov/cloudstac/'    # CMR-STAC API Endpoint
-    print("Connecting to API...")
-    api = Client.open(f'{stac}POCLOUD/')
-    collections = ['OPERA_L3_DSWX-HLS_PROVISIONAL_V1']
+    # Calculate the total number of days and the interval
+    total_days = (stop_date - start_date).days
+    num_workers = 10
+
+    interval = total_days // num_workers
     
-    search_params = {"collections": collections,
-                     "intersects": intersects_geometry,
-                     "datetime": [start_date, stop_date],
-                     "max_items": 10000}
-    search_dswx = api.search(**search_params)
-    items = search_dswx.item_collection()
-    dswx_data =list(search_dswx.items())
+    # Generate new start and stop dates for each search
+    date_ranges = []
+    for i in range(10):
+        new_start = start_date + timedelta(days=i * interval)
+        # Ensure the last interval ends exactly on the stop_date
+        if i == 9:
+            new_stop = stop_date
+        else:
+            new_stop = start_date + timedelta(days=(i + 1) * interval - 1)
+        date_ranges.append((new_start, new_stop))
+    
+    # Display the new date ranges
+    for start, stop in date_ranges:
+        print("Start:", start.strftime("%Y-%m-%d"), "Stop:", stop.strftime("%Y-%m-%d"))
+    
+    
+    filtered_urls_list = []
+    dswx_data = []
+    
+    
+    # Number of parallel workers (you can adjust this based on your needs and resources)
+
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        # Adjust the executor.submit call to include the additional parameters
+        future_to_date_range = {
+            executor.submit(search_dswx_data, date_range, intersects_geometry, ps.cloudy_threshold): date_range 
+            for date_range in date_ranges
+        }
+        
+        # Process the results as they complete
+        for future in as_completed(future_to_date_range):
+            date_range = future_to_date_range[future]
+            try:
+                f_urls, data_list = future.result()
+                filtered_urls_list.append(f_urls)
+                dswx_data.append(data_list)
+            except Exception as exc:
+                print(f'{date_range} generated an exception: {exc}')
+    
+
+    # Create a new list to hold all items from all collections
+    filtered_urls = []
+    # Iterate over each ItemCollection and extend the all_items list with its items
+    for ful in filtered_urls_list:
+        for f in ful:
+            filtered_urls.append(f)
+
+    dswx_data_a = []
+    for dsw in dswx_data:
+        for ds in dsw:
+            dswx_data_a.append(ds)
+    dswx_data = dswx_data_a
+
+    # Convert the wkt polygon to a Shapely Polygon
+    aoi = wkt.loads(ps.polygon)
+
     plot_frames(dswx_data,aoi)
 
-    # Filter cloudy days
-    print("Filtering cloudy days > " + str(ps.cloudy_threshold) + "%...")
-    filtered_items = list(filter(lambda item: filter_by_cloud_cover(item, threshold=ps.cloudy_threshold), items))
-    print(str(len(list(items))) + ' items were found.')
-    print(str(len(filtered_items)) + ' items meet the cloud threshold')
 
-    filtered_urls = list(map(return_granule, filtered_items))
     print(len(filtered_urls))
     
     # Create table of search results
@@ -206,7 +286,7 @@ def plot_frames(dswx_data,aoi):
     import cartopy.io.img_tiles as cimgt
    
     bg='World_Shaded_Relief'
-    zoomLevel = 12
+    zoomLevel = 10
     url = 'https://server.arcgisonline.com/ArcGIS/rest/services/' + bg + '/MapServer/tile/{z}/{y}/{x}.jpg'
     image = cimgt.GoogleTiles(url=url)
     ax.add_image(image, zoomLevel,zorder=1) #zoom level

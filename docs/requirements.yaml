@@ -30,3 +30,7 @@ dependencies:
   - itertools
   - shutil
   - pystac-client
+
+  - netcdf4
+  - earthaccess
+

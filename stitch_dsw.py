@@ -36,7 +36,7 @@ def organize_files(ps,dataDir):
         files_by_crs[f.name] = list(f.glob("OPERA*_WTR.tif"))
         
     # Organize downloaded into folders by CRS 
-    for i, f in enumerate(list(dataDir.glob('*.tif'))):
+    for i, f in enumerate(list(dataDir.glob('OPERA*.tif'))):
         with rasterio.open(f) as ds:
             files_by_crs[ds.profile['crs'].to_string()].append(f)
         
@@ -128,7 +128,7 @@ def main():
                     
         else:
             if os.path.isfile( os.path.join(str(final_mosaic_path),'mosaic.tif')):
-                print('Final stitched image already exists for ' + link_name)
+                print('Final stitched image already exists for ' + str(final_mosaic_path))
             else:           
                 print('Reprojecting and Stitching ' + date_dir)
                 # Get a colormap from one of the files
