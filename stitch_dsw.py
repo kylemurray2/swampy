@@ -117,7 +117,7 @@ def main():
             
         elif len(file_list)==1:    
                 # If there is only one, then just link to the original file as the output
-                source_name = glob.glob(date_dir + '/EPSG*/*tif')
+                source_name = glob.glob(date_dir + '/EPSG*/O*tif')
                 source_name_abs = os.path.abspath(source_name[0])
                 link_name = os.path.join(str(final_mosaic_path),'mosaic.tif')
                 

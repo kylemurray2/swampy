@@ -1,98 +1,132 @@
-'''
-Download SWOT data from podaac
-
-From example
-https://podaac.github.io/tutorials/notebooks/SearchDownload_SWOTviaCMR.html
-
-Each dataset has it’s own unique collection ID. 
-
-https://podaac.github.io/tutorials/notebooks/datasets/SWOTHR_s3Access_real_data_v11.html
-
-	Short Names:
-SWOT_L2_HR_Raster_1.1: https://podaac.jpl.nasa.gov/dataset/SWOT_L2_HR_Raster_1.1 Rasterized water surface elevation and inundation extent in geographically fixed tiles at resolutions of 100 m and 250 m in a Universal Transverse Mercator projection grid. Provides rasters with water surface elevation, area, water fraction, backscatter, geophysical information.
-SWOT_L2_LR_SSH_1.1: sea surface heights https://podaac.jpl.nasa.gov/dataset/SWOT_L2_LR_SSH_1.1
+import earthaccess, os, zipfile
+from shapely.geometry import box
 
 
-Other resources for swot:
-    https://github.com/SWOT-community/SWOT-OpenToolkit/tree/main
+def search_data(short_name, start_time, end_time, min_lat, max_lat, min_lon, max_lon):
+    """
+    Function to search SWOT data from NASA's Earthdata system
+    
+    Parameters:
+    short_name (str): The short name of the dataset
+    start_time (str): Start time in 'YYYY-MM-DD HH:MM:SS' format
+    end_time (str): End time in 'YYYY-MM-DD HH:MM:SS' format
+    min_lat (float): Minimum latitude of the bounding box
+    max_lat (float): Maximum latitude of the bounding box
+    min_lon (float): Minimum longitude of the bounding box
+    max_lon (float): Maximum longitude of the bounding box
+
+    Returns:
+    list: List of search results
+    
+    Info:
+        Check out the different data products
+        https://podaac.jpl.nasa.gov/SWOT?tab=mission-objectives&sections=about%2Bdata
     
     
-SWOT Level 2 KaRIn High Rate Version 1.1 Datasets from calibration phase, 4/8 through 4/22:
-Water Mask Pixel Cloud NetCDF - SWOT_L2_HR_PIXC_1.1 (DOI: 10.5067/SWOT-PIXC-1.1)
-Water Mask Pixel Cloud Vector Attribute NetCDF - SWOT_L2_HR_PIXCVec_1.1 (DOI: 10.5067/SWOT-PIXCVEC-1.1)
-River Vector Shapefile - SWOT_L2_HR_RiverSP_1.1 (DOI: 10.5067/SWOT-RIVERSP-1.1)
-Lake Vector Shapefile - SWOT_L2_HR_LakeSP_1.1 (DOI: 10.5067/SWOT-LAKESP-1.1)
-Raster NetCDF - SWOT_L2_HR_Raster_1.1 (DOI: 10.5067/SWOT-RASTER-1.1)
+    
+    """
+    # Define bounding box using Shapely
+    bounding_box = box(min_lon, min_lat, max_lon, max_lat).bounds
+    
+    # Perform search using earthaccess
+    results = earthaccess.search_data(
+        short_name=short_name,
+        temporal=(start_time, end_time),
+        bounding_box=bounding_box
+    )
+    
+    return results
 
-'''
+def download_data(results, download_path):
+    """
+    Function to download data based on search results
+    
+    Parameters:
+    results (list): Search results from search_data function
+    download_path (str): Directory to download the data
+    
+    Returns:
+    None
+    """
+    if not results:
+        print("No results found to download.")
+        return
+    
+    # Download data using earthaccess
+    earthaccess.download(results, download_path)
+    print(f"Data downloaded to {download_path}")
 
-import requests,json,glob,os,zipfile 
-from pathlib import Path
-import pandas as pd
-from urllib.request import urlretrieve
-from json import dumps
+def list_available_swot_products():
+    """
+    Function to list all available SWOT data products
 
-import earthaccess
-from earthaccess import Auth, DataCollections, DataGranules, Store
+    Returns:
+    dict: Dictionary of available SWOT data products with descriptions
+    """
+    swot_products = {
+        "SWOT_L2_HR_Raster_2.0": "Rasterized water surface elevation and inundation extent in fixed tiles at 100 m and 250 m resolution.",
+        "SWOT_L2_LR_SSH_2.0": "Sea surface heights.",
+        "SWOT_L2_HR_PIXC_2.0": "Water Mask Pixel Cloud NetCDF.",
+        "SWOT_L2_HR_PIXCVec_2.0": "Water Mask Pixel Cloud Vector Attribute NetCDF.",
+        "SWOT_L2_HR_RiverSP_2.0": "River Vector Shapefile.",
+        "SWOT_L2_HR_RiverAvg_2.0": "SWOT Level 2 River Cycle-Averaged Data Product, Version C",
+        "SWOT_L2_HR_LakeSP_2.0": "Lake Vector Shapefile.",
+        "SWOT_L1B_LR_INTF_2.0": "SWOT Level 1B Low-Rate Interferogram Data Product, Version C."
+    }
+    return swot_products
 
-from swampy import config
-from SARTS import makeMap
-
-from datetime import datetime
-from shapely import wkt
-from pystac_client import Client  
-
-import s3fs
-import fiona
-import h5netcdf
-import xarray as xr
-import pandas as pd
-import geopandas as gpd
-import numpy as np
-import matplotlib.pyplot as plt
-# import hvplot.xarray
-import earthaccess
-from earthaccess import Auth, DataCollections, DataGranules, Store
-from shapely.wkt import loads
-from osgeo import gdal
-
-import cartopy.crs as ccrs
-from pyproj import Proj, Transformer
+def unzip(folder):
+    
+    for item in os.listdir(folder):  # loop through items in dir
+        if item.endswith(".zip"):  # check for ".zip" extension
+            # Extract the date from the file name
+            date = item.split('_')[8][0:8]
+            date_folder = os.path.join(folder, date)
+            
+            # Create the date folder if it doesn't exist
+            if not os.path.exists(date_folder):
+                os.mkdir(date_folder)
+            
+            # Create zipfile object
+            zip_path = os.path.join(folder, item)
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                # Extract all files into the date folder
+                zip_ref.extractall(date_folder)
+            
+            # Optionally, remove the zip file after extraction
+            os.remove(zip_path)  # Uncomment this if you want to delete the .zip file after extraction
 
 
-import podaac_data_downloader
+# Example usage
+if __name__ == "__main__":
+    # Authenticate to Earthdata
+    auth = earthaccess.login()
+    folder = "./swot/LakesData"
+
+    # Define parameters for search
+    dataset = 'SWOT_L2_HR_LakeSP_2.0'
+    start_time = '2023-06-03 00:00:00'
+    end_time = '2029-04-02 23:59:59'
+    # min_lat, max_lat, min_lon, max_lon = 34.54, 34.61, -119.82, -120  # cachuma
+    min_lat, max_lat, min_lon, max_lon = 32, 49, -125, -114  # west US
+
+    results = search_data(dataset, start_time, end_time, min_lat, max_lat, min_lon, max_lon)
+    
+    # Check results
+    if results:
+        print(f"Found {len(results)} results.")
+        # Download data
+        download_data(results, folder)
+    else:
+        print("No data found for the given parameters.")
+    
+    # List all available SWOT products
+    swot_products = list_available_swot_products()
+    print("Available SWOT Data Products:")
+    for key, value in swot_products.items():
+        print(f"{key}: {value}")
+
+    unzip(folder)
 
 
 
-
-# Get our local parameters from params.yaml file
-ps = config.getPS()
-
-# Login to earth data
-auth = earthaccess.login()
-
-#earthaccess data search
-start_date = ps.date_start[0:4] + '-' + ps.date_start[4:6]+ '-' + ps.date_start[6:8] + ' 00:00:00'
-stop_date = ps.date_stop[0:4] + '-' + ps.date_stop[4:6]+ '-' + ps.date_stop[6:8] + ' 23:59:59'
-#'SWOT_L2_LR_SSH_1.1'# 'SWOT_L2_HR_LakeSP_1.1' #'SWOT_L2_HR_Raster_1.1'# 'SWOT_L2_HR_Raster_1.1' #SWOT_L2_LR_SSH_1.1 SWOT_L2_HR_LakeSP_1.1
-short_name='SWOT_L2_HR_LakeSP_1.1'
-temporal = (start_date,stop_date)
-granule_name ='*NA*'# '*_261_*'# '*NA*' #'*100m_UTM11*'
-bounding_box = loads(ps.polygon).bounds # WSEN
-results = earthaccess.search_data(short_name=short_name, 
-                                  temporal = temporal,
-                                  granule_name = granule_name)
-
-lakes_results = earthaccess.search_data(short_name = 'SWOT_L2_HR_Raster_1.1', 
-                                        temporal = ('2023-04-08 00:00:00', '2026-04-25 23:59:59'),
-                                        granule_name = '11S') # here we filter by Reach
-
-# passes = []
-# for r in river_results:
-#    pass_number = r['umm']['SpatialExtent']['HorizontalSpatialDomain']['Track']['Passes'][0]['Pass']
-#    passes.append(pass_number)
-
-# Download data
-# earthaccess.download(results, "./swot/HR_Raster")
-earthaccess.download(lakes_results, "./swot/HR_Lakes")
-earthaccess.download(results, "./swot/LR_SSH")

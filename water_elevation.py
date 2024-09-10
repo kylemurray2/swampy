@@ -197,6 +197,13 @@ def extract_water_edge_elevation(dsw_path,dem, ps, DEM_water_elevation, plot_fla
     Find where the edge intersects the DEM and average those elevations
     '''
     
+    # Initialize return variables at the start of the function
+    median_elevation = np.nan
+    mode_elevation = np.nan
+    std_elevation = np.nan
+    n_intersections = np.nan  # Default value set to NaN or any appropriate value
+
+    
     resampled_path = dsw_path.replace('mosaic.tif', 'mosaic_resampled.tif')
     if not os.path.isfile(resampled_path):
         print('resampling DSW to the DEM grid')
@@ -224,7 +231,6 @@ def extract_water_edge_elevation(dsw_path,dem, ps, DEM_water_elevation, plot_fla
     inverse_cleaned_binary_dsw = ~cleaned_binary_dsw
     cleaned_inverse_dsw = remove_small_objects(inverse_cleaned_binary_dsw, minimumPixelsInRegion, connectivity=1)
     binary_dsw_clean = ~cleaned_inverse_dsw
-    
     # plt.figure();plt.imshow(cleaned_binary_dsw);plt.title('cleaned_binary_dsw')
     # plt.figure();plt.imshow(binary_dsw_clean);plt.title('binary_dsw_clean')
     # plt.figure();plt.imshow(binary_dsw_clean)
@@ -244,7 +250,7 @@ def extract_water_edge_elevation(dsw_path,dem, ps, DEM_water_elevation, plot_fla
         # ])
         # edges = convolve2d(water_mask, kernel, mode='same', boundary='symm')
         # edge_mask = edges > 0
-        
+
         # Now add back in the clouds so we can make sure not to find water/cloud boundaries
         dsw_tri =np.zeros(binary_dsw_clean.shape)
         dsw_tri[binary_dsw_clean] = 1
@@ -266,6 +272,7 @@ def extract_water_edge_elevation(dsw_path,dem, ps, DEM_water_elevation, plot_fla
             # Calculate the median elevation of the water's edge
             median_elevation = np.nanmedian(water_edge_elevations[water_edge_elevations!=DEM_water_elevation])
             std_elevation = np.nanstd(water_edge_elevations[water_edge_elevations!=DEM_water_elevation])
+            n_intersections = len(water_edge_elevations)
             edge_line = np.zeros(edge_mask.shape) *np.nan
             edge_line[edge_mask] = 1
         
@@ -287,13 +294,13 @@ def extract_water_edge_elevation(dsw_path,dem, ps, DEM_water_elevation, plot_fla
                 
         else:
             print(dsw_path + ' failed')
-            median_elevation,mode_elevation,std_elevation = np.nan,np.nan,np.nan
+            median_elevation,mode_elevation,std_elevation,n_intersections = np.nan,np.nan,np.nan,np.nan
     
     else:
         print(dsw_path + ' failed')
-        median_elevation,mode_elevation,std_elevation = np.nan,np.nan,np.nan
+        median_elevation,mode_elevation,std_elevation,n_intersections = np.nan,np.nan,np.nan,np.nan
     
-    return median_elevation,mode_elevation,std_elevation
+    return median_elevation,mode_elevation,std_elevation,n_intersections
 
 
 def convert_to_decimal_year(date_str):
@@ -384,15 +391,17 @@ def main(plot_flag = False):
     elevations_medians = []
     elevations_modes = []
     elevations_stds = []
+    elevations_n = []
     # dsw_path = './data/20230430/mosaic.tif'
     for dsw_path in dsw_paths:
-        median_elevation,mode_elevation,std_elevation = extract_water_edge_elevation(dsw_path,dem, ps, DEM_water_elevation, plot_flag=plot_flag)
+        median_elevation,mode_elevation,std_elevation,n_intersections = extract_water_edge_elevation(dsw_path,dem, ps, DEM_water_elevation, plot_flag=plot_flag)
         print(f"The mode water surface elevation is: {mode_elevation:.5f} meters.")
         print(f"The median water surface elevation is: {median_elevation:.5f} meters.")
 
         elevations_medians.append(median_elevation)
         elevations_modes.append(mode_elevation)
         elevations_stds.append(std_elevation)
+        elevations_n.append(n_intersections)
         
     plt.figure()
     plt.plot(date_objects, elevations_medians, '.',label='median')
@@ -403,7 +412,7 @@ def main(plot_flag = False):
     plt.legend()
     plt.show()
     
-    return date_objects,elevations_medians,elevations_modes,elevations_stds, DEM_water_elevation
+    return date_objects,elevations_medians,elevations_modes,elevations_stds, DEM_water_elevation,elevations_n
     
 if __name__ == '__main__':
     '''
