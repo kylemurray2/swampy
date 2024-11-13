@@ -4,6 +4,7 @@ from pathlib import Path
 import fiona, os
 from multiprocessing import Pool
 from matplotlib import pyplot as plt
+from shapely.geometry import Point
 
 
 def process_shapefile(shp_file, lake_name, date_str):
@@ -28,62 +29,74 @@ def process_shapefile(shp_file, lake_name, date_str):
                 return {'date': pd.to_datetime(date_str, format='%Y%m%d'), 'wse': wse_value}
     return None
 
-def process_shapefile_for_lakes(shp_file):
+def process_shapefile_for_lakes(shapefile_path):
     """
-    Process a single shapefile and extract unique lake names.
-    
+    Function to process a shapefile and extract lake names and polygons.
+
     Parameters:
-    shp_file (str): Path to the shapefile.
+    shapefile_path (str or Path): Path to the shapefile.
 
     Returns:
-    set: A set of unique lake names from the shapefile.
+    geopandas.GeoDataFrame: GeoDataFrame containing lake names and polygons.
     """
-    lake_names = set()
-    
     try:
-        # Load the shapefile into a GeoDataFrame
-        gdf = gpd.read_file(shp_file)
+        # Read the shapefile
+        gdf = gpd.read_file(shapefile_path)
 
-        # Check if 'lake_name' column exists, then add all lake names to the set
+        # Ensure the expected columns are present
         if 'lake_name' in gdf.columns:
-            lake_names.update(gdf['lake_name'].dropna().unique())
-    
+            # Select only the necessary columns
+            gdf = gdf[['lake_name', 'geometry']]
+            return gdf
+        else:
+            print(f"'lake_name' column not found in {shapefile_path}")
+            return gpd.GeoDataFrame(columns=['lake_name', 'geometry'])
     except Exception as e:
-        print(f"Error processing {shp_file}: {e}")
-    
-    return lake_names
+        print(f"Error processing {shapefile_path}: {e}")
+        return gpd.GeoDataFrame(columns=['lake_name', 'geometry'])
 
-def get_unique_lake_names_parallel(base_dir, num_processes=None):
+def get_unique_lake_polygons_parallel(base_dir, output_shapefile, num_processes=None):
     """
-    Function to get a unique list of lake names from all shapefiles using parallel processing.
+    Function to get unique lake names and polygons from all shapefiles using parallel processing,
+    and save them into a new shapefile.
 
     Parameters:
-    base_dir (str): Path to the base directory containing YYYYMMDD folders with shapefiles.
+    base_dir (str): Path to the base directory containing folders with shapefiles.
+    output_shapefile (str): Path to the output shapefile to save the combined data.
     num_processes (int): Number of parallel processes to use. If None, the number of CPU cores will be used.
 
     Returns:
-    list: A sorted list of unique lake names across all shapefiles.
+    geopandas.GeoDataFrame: A GeoDataFrame containing unique lake names and polygons.
     """
     all_shapefiles = []
     
-    # Iterate through each date folder in the base directory to find all shapefiles
-    for date_folder in sorted(Path(base_dir).iterdir()):
-        if date_folder.is_dir():
-            shapefiles = list(date_folder.glob("*.shp"))
-            all_shapefiles.extend(shapefiles)
+    # Iterate through each folder in the base directory to find all shapefiles
+    for root, dirs, files in os.walk(base_dir):
+        for file in files:
+            if file.endswith(".shp"):
+                shapefile_path = os.path.join(root, file)
+                all_shapefiles.append(shapefile_path)
+
     if num_processes is None:
         num_processes = os.cpu_count()
+    
     # Use multiprocessing Pool to process the shapefiles in parallel
     with Pool(processes=num_processes) as pool:
         results = pool.map(process_shapefile_for_lakes, all_shapefiles)
 
-    # Combine the results from all processes
-    unique_lake_names = set().union(*results)
-    with open('lake_names.txt', 'w') as f:
-        for lake_name in unique_lake_names:
-            f.write(f"{lake_name}\n")
-    # Convert the set to a sorted list and return
-    return sorted(unique_lake_names)
+    # Combine the results from all processes into a single GeoDataFrame
+    combined_gdf = gpd.GeoDataFrame(pd.concat(results, ignore_index=True), crs=results[0].crs if results else None)
+
+    # Remove duplicates based on 'lake_name'
+    unique_gdf = combined_gdf.drop_duplicates(subset=['lake_name']).reset_index(drop=True)
+
+    # Save the unique lake names and polygons to a new shapefile
+    unique_gdf.to_file(output_shapefile)
+
+    print(f"Saved unique lakes to {output_shapefile}")
+
+    return unique_gdf
+
 
 def get_lake_wse_time_series_parallel(base_dir, lake_name, num_processes=None):
     """
@@ -136,53 +149,72 @@ def get_lake_wse_time_series_parallel(base_dir, lake_name, num_processes=None):
 
     return df
 
-def process_shapefile_for_nearest_lake(shp_file, target_point, date_str):
+
+def process_shapefile_for_nearest_lake(shp_file, target_point, date_str, max_distance):
     """
-    Process a single shapefile and find the WSE of the nearest lake to the given point.
+    Process a single shapefile and find the WSE of the nearest lake to the given point, within a maximum distance.
     
     Parameters:
     shp_file (str): Path to the shapefile.
     target_point (shapely.geometry.Point): The point (latitude/longitude) to find the nearest lake to.
     date_str (str): The date string corresponding to the folder name (YYYYMMDD).
+    max_distance (float): Maximum allowable distance (in meters) from the target point.
 
     Returns:
-    dict: A dictionary containing the date and WSE value for the nearest lake, or None if not found.
+    dict: A dictionary containing the date, WSE value, and lake name for the nearest lake, or None if not found.
     """
     try:
         # Load the shapefile into a GeoDataFrame
         gdf = gpd.read_file(shp_file)
 
-        # Check if the 'wse' column exists and there's valid geometry
-        if 'wse' in gdf.columns and gdf.geometry.notnull().all():
-            # Calculate the distance of all geometries from the target_point
-            gdf['distance'] = gdf.geometry.distance(target_point)
+        # Ensure the GeoDataFrame has a valid CRS
+        if gdf.crs is None:
+            print(f"Shapefile {shp_file} has no CRS, skipping.")
+            return None
+
+        # Reproject both the GeoDataFrame and the target point to a projected CRS (e.g., EPSG:3857)
+        gdf = gdf.to_crs(epsg=3857)  # Project to Web Mercator
+        target_point_projected = gpd.GeoSeries([target_point], crs="EPSG:4326").to_crs(epsg=3857).iloc[0]
+
+        # Check if the 'wse' and 'lake_name' columns exist and there's valid geometry
+        if 'wse' in gdf.columns and 'lake_name' in gdf.columns and gdf.geometry.notnull().all():
+            # Calculate the distance of all geometries from the projected target_point
+            gdf['distance'] = gdf.geometry.distance(target_point_projected)
+
+            # Filter to include only lakes within the max_distance
+            gdf_within_distance = gdf[gdf['distance'] <= max_distance]
+
+            # If no lakes are within the max_distance, return None
+            if gdf_within_distance.empty:
+                return None
 
             # Find the nearest lake (the one with the smallest distance)
-            nearest_lake = gdf.loc[gdf['distance'].idxmin()]
+            nearest_lake = gdf_within_distance.loc[gdf_within_distance['distance'].idxmin()]
 
-            # Extract the WSE value of the nearest lake
+            # Extract the WSE value and lake name of the nearest lake
             wse_value = nearest_lake['wse']
-            return {'date': pd.to_datetime(date_str, format='%Y%m%d'), 'wse': wse_value}
+            lake_name = nearest_lake['lake_name']
+            return {'date': pd.to_datetime(date_str, format='%Y%m%d'), 'wse': wse_value, 'lake_name': lake_name}
 
     except Exception as e:
         print(f"Error processing {shp_file}: {e}")
 
     return None
 
-from shapely.geometry import Point
-def get_lake_wse_time_series_by_location(base_dir, latitude, longitude, num_processes=None):
+def get_lake_wse_time_series_by_location(base_dir, latitude, longitude, max_distance, num_processes=None):
     """
     Create a time series of WSE for the lake nearest to a given latitude/longitude point
-    from shapefiles using parallel processing and selective column loading.
+    from shapefiles using parallel processing and selective column loading, within a maximum distance.
     
     Parameters:
     base_dir (str): Path to the base directory containing YYYYMMDD folders with shapefiles.
     latitude (float): Latitude of the target location.
     longitude (float): Longitude of the target location.
+    max_distance (float): Maximum allowable distance (in meters) from the target point.
     num_processes (int): The number of parallel processes to use. If None, it will use the number of CPU cores available.
     
     Returns:
-    pd.DataFrame: DataFrame containing the date and WSE for the nearest lake.
+    pd.DataFrame: DataFrame containing the date, WSE, and lake name for the nearest lake.
     """
     tasks = []
     target_point = Point(longitude, latitude)  # Create a shapely Point from lat/lon
@@ -202,7 +234,7 @@ def get_lake_wse_time_series_by_location(base_dir, latitude, longitude, num_proc
 
             # Add tasks to the task list for parallel processing
             for shp_file in shapefiles:
-                tasks.append((shp_file, target_point, date_str))
+                tasks.append((shp_file, target_point, date_str, max_distance))
 
     # Use a pool of workers to process the shapefiles in parallel
     with Pool(processes=num_processes) as pool:
@@ -213,7 +245,7 @@ def get_lake_wse_time_series_by_location(base_dir, latitude, longitude, num_proc
 
     # Check if time_series_data is empty before creating a DataFrame
     if not time_series_data:
-        print(f"No data found for the location ({latitude}, {longitude})")
+        print(f"No data found for the location ({latitude}, {longitude}) within {max_distance} meters.")
         return pd.DataFrame()  # Return an empty DataFrame
 
     # Create a DataFrame from the collected data
@@ -223,6 +255,7 @@ def get_lake_wse_time_series_by_location(base_dir, latitude, longitude, num_proc
     df = df.sort_values(by='date').reset_index(drop=True)
 
     return df
+
 
 def plot_wse_time_series(df, lake_name):
     """
@@ -248,14 +281,21 @@ def plot_wse_time_series(df, lake_name):
 # Example usage
 if __name__ == "__main__":
     base_dir = './swot/LakesData'  # Base directory containing YYYYMMDD folders
-    
-    unique_lake_names = get_unique_lake_names_parallel(base_dir)
-    latitude = 34.579  # Example latitude
-    longitude = -119.948  # Example longitude
-    num_processes = 4  # Specify the number of parallel processes, or leave it None for automatic
+    output_shp_fn = './swot/lakes_polygons.shp'
+    if not os.path.isfile('lake_names.txt'):
+        lake_names = get_unique_lake_polygons_parallel(base_dir,output_shp_fn)
+    else:
+        with open('lake_names.txt', 'r') as file:
+            lake_names = [line.strip() for line in file.readlines()]  # Read each line, stripping newline characters
+
+    # latitude,longitude = 34.579, -119.948 # Cachuma latitude,longitude
+    latitude,longitude = 43.457, -124.251 # oregon site? 
+
+    num_processes = 20  # Specify the number of parallel processes, or leave it None for automatic
 
     # Get the WSE time series for the water body near the specified lat/lon
-    wse_df = get_lake_wse_time_series_by_location(base_dir, latitude, longitude, num_processes=num_processes)
+    max_dist = 500 # Meters
+    wse_df = get_lake_wse_time_series_by_location(base_dir, latitude, longitude, max_dist, num_processes=num_processes)
 
     
     lake_name = 'Cachuma'  # The lake name you are interested in
@@ -269,4 +309,4 @@ if __name__ == "__main__":
         print(f"No data found for lake_name {lake_name}")
 
     # Save to CSV if needed
-    wse_df.to_csv('wse_data.csv', index=False)
+    wse_df.to_csv(f'wse_data{str(latitude)}{str(longitude)}.csv', index=False)

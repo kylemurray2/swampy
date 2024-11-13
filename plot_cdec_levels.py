@@ -54,6 +54,7 @@ else:
     elevations_medians = elevation_data_dict['elevations_medians']
     elevations_modes = elevation_data_dict['elevations_modes']
     elevations_std = elevation_data_dict['elevations_std']
+
 # Remove outliers
 elevations_medians_clean = remove_outliers(elevations_medians,n_sigma=3)
 elevations_modes_clean = remove_outliers(elevations_modes,n_sigma=3)

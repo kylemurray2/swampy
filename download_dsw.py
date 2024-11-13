@@ -39,8 +39,10 @@ def filter_by_cloud_cover(item, threshold=10):
         print("Error fetching URL:", xml_url)
         return False
 
-    c_cover = data_json['CloudCover']
-
+    try:
+        c_cover = data_json['CloudCover']
+    except KeyError:
+        c_cover = data_json.get('eo:cloud_cover')
 
     return c_cover <= threshold
 
@@ -51,15 +53,14 @@ def return_granule(item):
     
 # ps = config.getPS()
 
-def search_dswx_data(start_stop_tuple,intersects_geometry,cloudy_threshold):
-    start, stop = start_stop_tuple
+def search_dswx_data(date_range,intersects_geometry,cloudy_threshold,collections):
+    start, stop = date_range
     
 
     
     # Setup STAC API
     stac = 'https://cmr.earthdata.nasa.gov/cloudstac/'  # CMR-STAC API Endpoint
     api = Client.open(f'{stac}POCLOUD/')
-    collections = ['OPERA_L3_DSWX-HLS_PROVISIONAL_V1']
     
     # Define search parameters
     search_params = {
@@ -74,13 +75,28 @@ def search_dswx_data(start_stop_tuple,intersects_geometry,cloudy_threshold):
     
     # Return the collected items
     # Filter cloudy days
-    print("Filtering cloudy days > " + str(cloudy_threshold) + "%...")
-    filtered_items = list(filter(lambda item: filter_by_cloud_cover(item, threshold=cloudy_threshold), search_dswx.item_collection()))
-    print(str(len(list(search_dswx.item_collection()))) + ' items were found.')
-    print(str(len(filtered_items)) + ' items meet the cloud threshold')
-    filtered_urls = list(map(return_granule, filtered_items))
     
-    return filtered_urls, list(search_dswx.items())
+    # print("Filtering cloudy days > " + str(cloudy_threshold) + "%...")
+    
+    # # Define the normal function
+    # def cloud_cover_filter(item):
+    #     return filter_by_cloud_cover(item, threshold=cloudy_threshold)
+    
+    # # Apply the filter using the defined function
+    # filtered_items = list(filter(cloud_cover_filter, search_dswx.item_collection())) 
+    
+
+    
+    # print(str(len(list(search_dswx.item_collection()))) + ' items were found.')
+    # print(str(len(filtered_items)) + ' items meet the cloud threshold')
+    
+    # filtered_urls = list(map(return_granule, filtered_items))
+    
+    all_items = list(search_dswx.item_collection())
+    all_urls = list(map(return_granule, all_items))
+    
+    
+    return all_urls, list(search_dswx.items())
 
 
 
@@ -98,7 +114,12 @@ def searchDSWx(ps):
     already_dl_dates = glob.glob('data/2???????')
     if len(already_dl_dates)>0:
         already_dl_dates.sort()
-        start_date = datetime(int(ps.date_start[0:4]), int(ps.date_start[4:6]), int(ps.date_start[6:8]))   
+        # Extract the latest date from the already downloaded dates
+        last_date_str = already_dl_dates[-1][-8:]  # Assumes format 'data/YYYYMMDD'
+        last_date = datetime.strptime(last_date_str, '%Y%m%d')
+        # Set the new start date to the day after the last downloaded date
+        start_date = last_date + timedelta(days=1)
+        # start_date = datetime(int(ps.date_start[0:4]), int(ps.date_start[4:6]), int(ps.date_start[6:8]))   
         print(f'already found the following dates { already_dl_dates}.  Setting new start date to {start_date}.')
     else:
         start_date = datetime(int(ps.date_start[0:4]), int(ps.date_start[4:6]), int(ps.date_start[6:8]))    
@@ -112,15 +133,17 @@ def searchDSWx(ps):
     # Calculate the total number of days and the interval
     total_days = (stop_date - start_date).days
     num_workers = 10
-
+    
     interval = total_days // num_workers
+    if interval == 0:
+        interval = 1  # Ensure at least one day is covered
     
     # Generate new start and stop dates for each search
     date_ranges = []
-    for i in range(10):
+    for i in range(num_workers):
         new_start = start_date + timedelta(days=i * interval)
         # Ensure the last interval ends exactly on the stop_date
-        if i == 9:
+        if i == num_workers - 1:
             new_stop = stop_date
         else:
             new_stop = start_date + timedelta(days=(i + 1) * interval - 1)
@@ -140,7 +163,7 @@ def searchDSWx(ps):
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         # Adjust the executor.submit call to include the additional parameters
         future_to_date_range = {
-            executor.submit(search_dswx_data, date_range, intersects_geometry, ps.cloudy_threshold): date_range 
+            executor.submit(search_dswx_data, date_range, intersects_geometry, ps.cloudy_threshold,ps.collections): date_range 
             for date_range in date_ranges
         }
         

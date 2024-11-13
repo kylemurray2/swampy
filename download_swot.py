@@ -99,27 +99,34 @@ def unzip(folder):
 
 # Example usage
 if __name__ == "__main__":
-    # Authenticate to Earthdata
-    auth = earthaccess.login()
-    folder = "./swot/LakesData"
-
-    # Define parameters for search
-    dataset = 'SWOT_L2_HR_LakeSP_2.0'
+    
+    # Define parameters for search_____________________________________________
+    folder     = "./swot/RasterData"
+    dataset    = 'SWOT_L2_HR_Raster_2.0'
+    dl         = True
     start_time = '2023-06-03 00:00:00'
-    end_time = '2029-04-02 23:59:59'
+    end_time   = '2029-04-02 23:59:59'
     # min_lat, max_lat, min_lon, max_lon = 34.54, 34.61, -119.82, -120  # cachuma
     min_lat, max_lat, min_lon, max_lon = 32, 49, -125, -114  # west US
+    #__________________________________________________________________________
+    
+    # Authenticate to Earthdata
+    auth = earthaccess.login()
+    if not os.path.isdir(folder):
+        os.mkdir(folder)
 
     results = search_data(dataset, start_time, end_time, min_lat, max_lat, min_lon, max_lon)
-    
     # Check results
     if results:
         print(f"Found {len(results)} results.")
-        # Download data
-        download_data(results, folder)
     else:
         print("No data found for the given parameters.")
-    
+    # Download data
+    if dl:
+        download_data(results, folder)
+    else:
+        print("skipping download")
+              
     # List all available SWOT products
     swot_products = list_available_swot_products()
     print("Available SWOT Data Products:")
