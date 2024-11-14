@@ -57,7 +57,6 @@ def search_dswx_data(date_range,intersects_geometry,cloudy_threshold,collections
     start, stop = date_range
     
 
-    
     # Setup STAC API
     stac = 'https://cmr.earthdata.nasa.gov/cloudstac/'  # CMR-STAC API Endpoint
     api = Client.open(f'{stac}POCLOUD/')
@@ -97,7 +96,6 @@ def search_dswx_data(date_range,intersects_geometry,cloudy_threshold,collections
     
     
     return all_urls, list(search_dswx.items())
-
 
 
     
@@ -328,17 +326,18 @@ def plot_frames(dswx_data,aoi):
 def extract_date_from_filename(filename):
     """Extract the date in YYYYMMDD format from the filename."""
     match = re.search(r'(\d{8})', filename)
-    if match:
-        return match.group(1)
-    else:
-        raise ValueError(f"Cannot extract date from filename: {filename}")
+    return match.group(1) if match else None
 
 
 def organize_directories(data_dir):
     tif_files = [f for f in os.listdir(data_dir) if f.endswith('.tif')]
 
-    # Extract unique dates from filenames
-    unique_dates = set([extract_date_from_filename(f) for f in tif_files])
+    # Extract unique dates from filenames, skipping files without dates
+    unique_dates = set()
+    for f in tif_files:
+        date = extract_date_from_filename(f)
+        if date:
+            unique_dates.add(date)
 
     # Create directories for each unique date
     for date in unique_dates:
@@ -347,9 +346,10 @@ def organize_directories(data_dir):
     # Move the .tif files to the respective directories
     for f in tif_files:
         date = extract_date_from_filename(f)
-        destination = os.path.join(data_dir, date, f)
-        source = os.path.join(data_dir, f)
-        os.rename(source, destination)
+        if date:  # Only move files that have a valid date
+            destination = os.path.join(data_dir, date, f)
+            source = os.path.join(data_dir, f)
+            os.rename(source, destination)
 
 
 def main():

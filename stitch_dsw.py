@@ -92,16 +92,38 @@ def reprojectDSWx(epsg_code, file_batch, output_filename, dswx_colormap, resolut
 
     return output_filename
 
-
+def check_small_files(data_dir, min_size_bytes=1024):
+    """Check for and return list of files smaller than min_size_bytes (default 1KB)"""
+    small_files = []
+    data_dir = Path(data_dir)
+    
+    # Check both in date directories and their subdirectories
+    for tif_file in data_dir.rglob('*.tif'):
+        if tif_file.stat().st_size < min_size_bytes:
+            small_files.append((tif_file, tif_file.stat().st_size))
+            tif_file.unlink()  # Delete the small file
+            
+    return small_files
+    
 def main():
     ps = config.getPS()
-        
+    
     date_dirs = glob.glob(ps.dataDir + '/2???????')
     date_dirs.sort()
-    dates=[]
-    for date_fn in date_dirs:
-        dates.append(date_fn.split('/')[-1])
     
+    # Check for small files before processing
+    small_files_found = []
+    for date_dir in date_dirs:
+        small_files = check_small_files(date_dir)
+        if small_files:
+            small_files_found.extend(small_files)
+    
+    if small_files_found:
+        print("\nWarning: Found and deleted the following small files (<1KB):")
+        for f, size in small_files_found:
+            print(f"  - {f} ({size} bytes)")
+        print("\nPlease check your data and run the script again.")
+        return
     
     for date_dir in date_dirs:
            
