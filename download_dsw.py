@@ -8,6 +8,7 @@ Download DSWx data
 
 @author: km
 """
+
 from pystac_client import Client  
 from shapely import wkt
 import os, json, requests, re, glob
@@ -48,9 +49,48 @@ def filter_by_cloud_cover(item, threshold=10):
 
 
 def return_granule(item):
-    return item.assets['0_B01_WTR'].href
+    """Return WTR, WTR-2, and CONF asset URLs for the item with their asset types"""
+    url_info = []
     
+    # Define correct band numbers for each asset type
+    wtr_asset = '0_B01_WTR'
+    wtr2_asset = '0_B06_WTR-2'  # Changed from B01 to B06
+    conf_asset = '0_B03_CONF'    # Changed from B01 to B03
     
+    if wtr_asset in item.assets:
+        wtr_url = item.assets[wtr_asset].href
+        url_info.append((wtr_url, wtr_asset))
+        
+        # Get WTR-2 and CONF with correct band numbers
+        if wtr2_asset in item.assets:
+            url_info.append((item.assets[wtr2_asset].href, wtr2_asset))
+        if conf_asset in item.assets:
+            url_info.append((item.assets[conf_asset].href, conf_asset))
+    
+    return url_info
+
+def check_file_exists(filename, data_dir):
+    """
+    Check if a specific DSWx file exists in any EPSG subdirectory of any date directory
+    """
+    # Extract date from filename (assuming format contains YYYYMMDD)
+    date_match = re.search(r'(\d{8})', filename)
+    if not date_match:
+        return False
+    
+    date = date_match.group(1)
+    date_dir = os.path.join(data_dir, date)
+    
+    if not os.path.exists(date_dir):
+        return False
+    
+    # Look in all EPSG subdirectories
+    epsg_dirs = glob.glob(os.path.join(date_dir, 'EPSG:*'))
+    for epsg_dir in epsg_dirs:
+        if os.path.exists(os.path.join(epsg_dir, filename)):
+            return True
+    
+    return False
 # ps = config.getPS()
 
 def search_dswx_data(date_range,intersects_geometry,cloudy_threshold,collections):
@@ -63,7 +103,7 @@ def search_dswx_data(date_range,intersects_geometry,cloudy_threshold,collections
     
     # Define search parameters
     search_params = {
-        "collections": collections,
+        "collections": ps.collections,
         "intersects": intersects_geometry,
         "datetime": [start, stop],
         "max_items": 100000
@@ -92,8 +132,10 @@ def search_dswx_data(date_range,intersects_geometry,cloudy_threshold,collections
     # filtered_urls = list(map(return_granule, filtered_items))
     
     all_items = list(search_dswx.item_collection())
-    all_urls = list(map(return_granule, all_items))
-    
+    all_urls = []
+    for item in all_items:
+        urls = return_granule(item)
+        all_urls.extend(urls)
     
     return all_urls, list(search_dswx.items())
 
@@ -109,7 +151,7 @@ def searchDSWx(ps):
     '''
     
     
-    already_dl_dates = glob.glob('data/2???????')
+    already_dl_dates =[]# glob.glob('data/2???????')
     if len(already_dl_dates)>0:
         already_dl_dates.sort()
         # Extract the latest date from the already downloaded dates
@@ -122,8 +164,12 @@ def searchDSWx(ps):
     else:
         start_date = datetime(int(ps.date_start[0:4]), int(ps.date_start[4:6]), int(ps.date_start[6:8]))    
     
-    stop_date =  datetime.today()  
-    
+    # stop_date = datetime.today()  
+    if ps.date_stop is None:
+        stop_date = datetime.today()  
+    else:
+        stop_date = datetime(int(ps.date_stop[0:4]), int(ps.date_stop[4:6]), int(ps.date_stop[6:8]))    
+
     # Convert the wkt polygon to a Shapely Polygon
     aoi = wkt.loads(ps.polygon)
     intersects_geometry = aoi.__geo_interface__
@@ -233,52 +279,81 @@ def dl(url,outname):
             file.write(data)
 
             
-def dlDSWx(urls,ps,dataDir): 
+def dlDSWx(urls, ps, dataDir): 
     '''
-    Download the DSWx files given urls
+    Download the DSWx files given urls, only if all three asset types don't exist
     '''
-    # Create a list of file path/names
-    outNames = []
-    dl_list = []
-    # dataDir2 = './westCoastData'
-    
-    # for url in urls:
-    #     fname2 = os.path.join(dataDir2, url.split('/')[-1])
-    #     if os.path.isfile(fname2):
-    #         os.system('ln -s ' + fname2 + ' dataDir/')
-    
-    for url in urls:
-        file_name = url.split('/')[-1]
-        fname = os.path.join(dataDir, file_name)
-        pattern = f'./data/*/{file_name}'
-        matching_files = glob.glob(pattern)
-        
-        
-        if len(matching_files) == 0:
-            outNames.append(os.path.join(dataDir, url.split('/')[-1]))
-            dl_list.append(url)
-            
     if not os.path.isdir(dataDir):
         os.mkdir(dataDir)
-        
-    print('Downloading the following files:')
-    print(dl_list)
-    print('downloading with '  + str(nproc) + ' cpus')
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=nproc) as executor:  # Adjust max_workers as needed
-        futures = [executor.submit(dl, url, outName) for url, outName in zip(dl_list, outNames)]
-        concurrent.futures.wait(futures)
+    # Group URLs by their base filename (without asset type and band number)
+    grouped_files = {}
+    for url_tuple in urls:
+        url, asset_type = url_tuple
+        file_name = url.split('/')[-1]
+        # Split the filename and remove the last two parts (B0X_asset-type.tif)
+        name_parts = file_name.split('_')
+        base_key = '_'.join(name_parts[:-2])  # Remove band number and asset type
+        
+        if base_key not in grouped_files:
+            grouped_files[base_key] = []
+        grouped_files[base_key].append((url, asset_type))
+
+    dl_list = []
+    outNames = []
+    
+    # Debug prints
+    print(f"Number of grouped files: {len(grouped_files)}")
+    
+    # Check each group of files
+    for base_key, file_group in grouped_files.items():
+        # Debug prints
+        print(f"\nChecking group: {base_key}")
+        print(f"Number of files in group: {len(file_group)}")
+        print(f"Asset types in group: {set(asset[1] for asset in file_group)}")
+        
+        # Only process groups that have all three asset types
+        asset_types = set(asset[1] for asset in file_group)
+        if len(asset_types) == 3:  # We have all three types
+            print("Found group with all three asset types")
+            # Check if any of the three files are missing
+            missing_files = []
+            for url, asset_type in file_group:
+                file_name = url.split('/')[-1]
+                exists = check_file_exists(file_name, dataDir)
+                print(f"Checking {file_name}: {'exists' if exists else 'missing'}")
+                if not exists:
+                    missing_files.append((url, os.path.join(dataDir, file_name)))
+            
+            print(f"Number of missing files: {len(missing_files)}")
+            # If any file is missing from the group, download all three
+            if missing_files:
+                for url, outName in missing_files:
+                    dl_list.append(url)
+                    outNames.append(outName)
+
+    print(f"\nFinal download list size: {len(dl_list)}")
+
+    if dl_list:
+        print('Downloading the following files:')
+        print(dl_list)
+        print('downloading with ' + str(nproc) + ' cpus')
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=nproc) as executor:
+            futures = [executor.submit(dl, url, outName) for url, outName in zip(dl_list, outNames)]
+            concurrent.futures.wait(futures)
 
     # check the files
-    for url in urls:
+    for url_tuple in urls:
+        url, _ = url_tuple
         fname = os.path.join(dataDir, url.split('/')[-1])
-        if not os.path.isfile(fname):
-            print('Warning: File does not exist ' + fname)
-        else:
-            if os.path.getsize(fname) < 2**10: # If it's smaller than 1 Kb
+        if os.path.isfile(fname):
+            if os.path.getsize(fname) < 2**10:  # If it's smaller than 1 Kb
                 print('Warning: ' + fname + ' is too small. Try again.')
-                
-
+                try:
+                    os.remove(fname)
+                except OSError:
+                    print(f"Could not remove corrupted file: {fname}")
 def plot_frames(dswx_data,aoi):
     '''
     Plot the footprints from the DSWx search results

@@ -5,186 +5,281 @@ Created on Fri Sep 22 16:06:50 2023
 
 Sorts tif files into YYYYMMDD/EPSG directories
 Stitches all images from each date together
-Outputs mosaic.tif in each date directory
+Outputs mosaic_[type].tif files in each date directory
 
 @author: km
 """
 
-import rasterio, os, glob
-import numpy as np
+import rasterio
+import os
+import glob
 from rasterio.merge import merge
 from rasterio.warp import calculate_default_transform, reproject, Resampling
 from collections import defaultdict
-from multiprocessing import Pool
 from pathlib import Path
 from swampy import config
-from itertools import repeat
+import gc
 
-def organize_by_crs(crs, file_list,output_path):
-    current_output_path = output_path/crs
-    if not current_output_path.exists():
-        current_output_path.mkdir()
+def check_small_files(data_dir, min_size_bytes=1024):
+    """Check for and delete files smaller than min_size_bytes (default 1KB)"""
+    small_files = []
+    data_dir = Path(data_dir)
     
-    for f in file_list:
-        f.rename(current_output_path/f.name)
-        
-def organize_files(ps,dataDir):
-    dataDir = Path(dataDir)   
-    # Organize and mosaic granules
-    files_by_crs = defaultdict(list)
-    for f in [f for f in dataDir.iterdir() if f.is_dir()]:
-        files_by_crs[f.name] = list(f.glob("OPERA*_WTR.tif"))
-        
-    # Organize downloaded into folders by CRS 
-    for i, f in enumerate(list(dataDir.glob('OPERA*.tif'))):
-        with rasterio.open(f) as ds:
-            files_by_crs[ds.profile['crs'].to_string()].append(f)
-        
-    _ = list(map(organize_by_crs, files_by_crs.keys(), files_by_crs.values(),repeat(dataDir)))
+    for tif_file in data_dir.rglob('*.tif'):
+        if tif_file.stat().st_size < min_size_bytes:
+            small_files.append((tif_file, tif_file.stat().st_size))
+            tif_file.unlink()
+            
+    return small_files
+
+def organize_files(date_dir):
+    """Organize files by CRS and type"""
+    date_dir = Path(date_dir)   
+    files_by_crs = defaultdict(lambda: {'WTR': [], 'WTR-2': [], 'CONF': []})
+    
+    # Handle files in the main directory
+    for f in date_dir.glob('OPERA*.tif'):
+        try:
+            with rasterio.open(f) as ds:
+                crs = ds.profile['crs'].to_string()
+                
+                # Determine file type
+                if '_WTR.' in f.name:
+                    file_type = 'WTR'
+                elif '_WTR-2.' in f.name:
+                    file_type = 'WTR-2'
+                elif '_CONF.' in f.name:
+                    file_type = 'CONF'
+                else:
+                    continue
+                
+                # Create EPSG directory and move file
+                current_output_path = date_dir/crs
+                current_output_path.mkdir(exist_ok=True)
+                new_path = current_output_path/f.name
+                f.rename(new_path)
+                files_by_crs[crs][file_type].append(new_path)
+                
+        except Exception as e:
+            print(f"Warning: Error processing file {f}: {str(e)}")
+            continue
+
+    # Add any files already in EPSG directories
+    for epsg_dir in [d for d in date_dir.iterdir() if d.is_dir() and 'EPSG' in d.name]:
+        crs = epsg_dir.name
+        for file_type in ['WTR', 'WTR-2', 'CONF']:
+            pattern = f"OPERA*_{file_type}.tif"
+            files_by_crs[crs][file_type].extend(list(epsg_dir.glob(pattern)))
 
     return files_by_crs
 
-
-def reprojectDSWx(epsg_code, file_batch, output_filename, dswx_colormap, resolution_reduction_factor = 1):
-    '''
-    Takes a list of files in the same CRS and mosaic them, and then reproject 
-    it to EPSG:4326.
-    '''
+def reprojectDSWx(epsg_code, file_batch, output_filename, colormap=None, bounds=None, dst_transform=None, dst_width=None, dst_height=None):
+    """Reproject and merge a batch of files"""
+    if not file_batch:
+        return None
+        
     dst_crs = 'EPSG:4326'
-    merged_img, merged_transform = merge(file_batch, method='min')
-    merged_output_bounds = rasterio.transform.array_bounds(merged_img.shape[-2], merged_img.shape[-1] , merged_transform)
-
-    kwargs = {
-        "src_crs": epsg_code, 
-        "dst_crs": dst_crs, 
-        "width":merged_img.shape[-1], 
-        "height": merged_img.shape[-2], 
-        "left": merged_output_bounds[0],
-        "bottom": merged_output_bounds[1],
-        "right": merged_output_bounds[2],
-        "top": merged_output_bounds[3],
-        "dst_width": merged_img.shape[-1]//resolution_reduction_factor, 
-        "dst_height":merged_img.shape[-2]//resolution_reduction_factor  
-    }
     
-    dst_transform, width, height = calculate_default_transform(**kwargs)
+    # Get bounds and validate files
+    bounds = bounds or None
+    valid_files = []
+    for file in file_batch:
+        try:
+            with rasterio.open(file) as src:
+                if src.width > 0 and src.height > 0:
+                    if bounds is None:
+                        bounds = src.bounds
+                    else:
+                        bounds = (
+                            min(bounds[0], src.bounds[0]),
+                            min(bounds[1], src.bounds[1]),
+                            max(bounds[2], src.bounds[2]),
+                            max(bounds[3], src.bounds[3])
+                        )
+                    valid_files.append(file)
+        except Exception as e:
+            print(f"Warning: Error reading file {file}: {str(e)}")
+            
+    if not valid_files:
+        return None
 
-    with rasterio.open(file_batch[0]) as src:
+    # Merge files
+    merged_img, merged_transform = merge(valid_files, method='min')
+    
+    with rasterio.open(valid_files[0]) as src:
+        dst_transform, width, height = calculate_default_transform(
+            src_crs=epsg_code,
+            dst_crs=dst_crs,
+            width=merged_img.shape[-1],
+            height=merged_img.shape[-2],
+            left=bounds[0],
+            bottom=bounds[1],
+            right=bounds[2],
+            top=bounds[3]
+        )
+
         dst_kwargs = src.profile.copy()
         dst_kwargs.update({
-            'height':height,
-            'width':width,
-            'transform':dst_transform,
-            'crs':dst_crs
+            'height': height,
+            'width': width,
+            'transform': dst_transform,
+            'crs': dst_crs,
+            'count': 1
         })
         
         with rasterio.open(output_filename, 'w', **dst_kwargs) as dst:
             reproject(
-                source = merged_img, 
-                destination = rasterio.band(dst, 1), 
-                src_transform = merged_transform,
-                dst_transform = dst_transform,
-                src_crs = src.crs,
-                dst_crs = dst_crs,
+                source=merged_img,
+                destination=rasterio.band(dst, 1),
+                src_transform=merged_transform,
+                dst_transform=dst_transform,
+                src_crs=epsg_code,
+                dst_crs=dst_crs,
                 resampling=Resampling.nearest
             )
-            dst.write_colormap(1, dswx_colormap)
+            if colormap:
+                dst.write_colormap(1, colormap)
 
     return output_filename
 
-def check_small_files(data_dir, min_size_bytes=1024):
-    """Check for and return list of files smaller than min_size_bytes (default 1KB)"""
-    small_files = []
-    data_dir = Path(data_dir)
+def process_date_directory(date_dir):
+    """Process a single date directory"""
+    print(f"\nProcessing directory: {date_dir}")
     
-    # Check both in date directories and their subdirectories
-    for tif_file in data_dir.rglob('*.tif'):
-        if tif_file.stat().st_size < min_size_bytes:
-            small_files.append((tif_file, tif_file.stat().st_size))
-            tif_file.unlink()  # Delete the small file
-            
-    return small_files
-    
-def main():
-    ps = config.getPS()
-    
-    date_dirs = glob.glob(ps.dataDir + '/2???????')
-    date_dirs.sort()
-    
-    # Check for small files before processing
-    small_files_found = []
-    for date_dir in date_dirs:
-        small_files = check_small_files(date_dir)
-        if small_files:
-            small_files_found.extend(small_files)
-    
-    if small_files_found:
-        print("\nWarning: Found and deleted the following small files (<1KB):")
-        for f, size in small_files_found:
-            print(f"  - {f} ({size} bytes)")
-        print("\nPlease check your data and run the script again.")
+    # Organize files by CRS and type
+    files_by_crs = organize_files(date_dir)
+    if not files_by_crs:
+        print(f"No files found in {date_dir}")
         return
-    
-    for date_dir in date_dirs:
-           
-        files_by_crs = organize_files(ps,date_dir)
-        # Get a list of the tif files
-        file_list = glob.glob(os.path.join(date_dir, 'EPSG*','*_WTR.tif'))
-        final_mosaic_path =Path(date_dir)
-        if not final_mosaic_path.exists():
-            final_mosaic_path.mkdir()
+
+    # Process each CRS
+    for crs, files_by_type in files_by_crs.items():
+        print(f"Processing CRS: {crs}")
+        mosaic_folder = Path(date_dir)/crs/'mosaics'
+        mosaic_folder.mkdir(parents=True, exist_ok=True)
+        
+        # Process each layer type independently
+        for layer_type in ['WTR', 'WTR-2', 'CONF']:
+            files = files_by_type[layer_type]
+            if not files:
+                print(f"No {layer_type} files found in {crs}")
+                continue
             
-        if len(file_list)==0:
-            print('No tif files found in the date directory ' + date_dir)
+            # Calculate bounds for this layer type
+            layer_bounds = None
+            for file in files:
+                try:
+                    with rasterio.open(file) as src:
+                        if src.width > 0 and src.height > 0:
+                            if layer_bounds is None:
+                                layer_bounds = src.bounds
+                            else:
+                                layer_bounds = (
+                                    min(layer_bounds[0], src.bounds[0]),  # left
+                                    min(layer_bounds[1], src.bounds[1]),  # bottom
+                                    max(layer_bounds[2], src.bounds[2]),  # right
+                                    max(layer_bounds[3], src.bounds[3])   # top
+                                )
+                except Exception as e:
+                    print(f"Warning: Error reading file {file}: {str(e)}")
+                    continue
+
+            if layer_bounds is None:
+                print(f"No valid bounds found for {layer_type}")
+                continue
+
+            print(f"Processing {len(files)} {layer_type} files")
+            print(f"{layer_type} bounds: {layer_bounds}")
             
-        elif len(file_list)==1:    
-                # If there is only one, then just link to the original file as the output
-                source_name = glob.glob(date_dir + '/EPSG*/O*tif')
-                source_name_abs = os.path.abspath(source_name[0])
-                link_name = os.path.join(str(final_mosaic_path),'mosaic.tif')
+            # Calculate transform for this layer
+            with rasterio.open(files[0]) as src:
+                dst_transform, width, height = calculate_default_transform(
+                    src_crs=crs,
+                    dst_crs='EPSG:4326',
+                    width=src.width,
+                    height=src.height,
+                    left=layer_bounds[0],
+                    bottom=layer_bounds[1],
+                    right=layer_bounds[2],
+                    top=layer_bounds[3]
+                )
+            
+            # Process in batches
+            batch_size = 4
+            output_files = []
+            
+            for i in range(0, len(files), batch_size):
+                batch = files[i:i + batch_size]
+                output_file = mosaic_folder/f'temp_{crs}_{layer_type}_{i//batch_size}.tif'
                 
-                if not os.path.isfile(link_name):
-                    os.symlink(source_name_abs, link_name)
-                else:
-                    print('Link already exists for ' + link_name)
-                    
-        else:
-            if os.path.isfile( os.path.join(str(final_mosaic_path),'mosaic.tif')):
-                print('Final stitched image already exists for ' + str(final_mosaic_path))
-            else:           
-                print('Reprojecting and Stitching ' + date_dir)
-                # Get a colormap from one of the files
-                with rasterio.open(file_list[0]) as ds:
-                    dswx_colormap = ds.colormap(1)
-                    
-                output_path = Path(date_dir)
+                # Get colormap from first file if WTR
+                colormap = None
+                if layer_type == 'WTR':
+                    with rasterio.open(batch[0]) as src:
+                        colormap = src.colormap(1)
                 
-                resolution_reduction_factor = 1
-                nchunks = 10
-                for key in files_by_crs.keys():
-                    mosaic_folder = (output_path/key/'mosaics')
-                    mosaic_folder.mkdir(parents=True, exist_ok=True)
-                    filenames = list((output_path/key).glob('*.tif'))
-                    filename_chunks = np.array_split(filenames, nchunks)
+                result = reprojectDSWx(crs, batch, output_file, colormap, 
+                                     bounds=layer_bounds, dst_transform=dst_transform,
+                                     dst_width=width, dst_height=height)
+                if result:
+                    output_files.append(result)
+                gc.collect()
+            
+            # Create final mosaic for this type
+            if output_files:
+                final_output = Path(date_dir)/f'mosaic_{layer_type.lower()}.tif'
+                print(f"Creating final {layer_type} mosaic...")
+                
+                with rasterio.open(output_files[0]) as src:
+                    profile = src.profile.copy()
+                    colormap = src.colormap(1) if layer_type == 'WTR' else None
                     
-                    output_filename = 'temp_{}_{}.tif'
-                    function_inputs = []
-                    count = 0
-                    for chunk in filename_chunks:
-                        if len(chunk) > 0:
-                            input_tuple = (key, chunk, mosaic_folder/output_filename.format(key, str(count).zfill(4)), dswx_colormap, resolution_reduction_factor)
-                            function_inputs.append(input_tuple)
-                            count += 1
-                            
-                    with Pool() as pool:
-                        output_files = pool.starmap(reprojectDSWx, function_inputs)
-                        
-                mosaic_list = glob.glob(os.path.join(date_dir,'EPSG*','mosaics','*tif'))
-                reprojectDSWx('EPSG:4326', mosaic_list, Path(final_mosaic_path / 'mosaic.tif'),dswx_colormap)
+                    with rasterio.open(final_output, 'w', **profile) as dst:
+                        data, _ = merge(output_files, method='min')
+                        dst.write(data[0], 1)
+                        if colormap:
+                            dst.write_colormap(1, colormap)
+                        del data
+                        gc.collect()
+                
+                print(f"{layer_type} mosaic created successfully")
+
+def main():
+    try:
+        ps = config.getPS()
+        date_dirs = sorted(glob.glob(os.path.join(ps.dataDir, '2???????')))
+        
+        if not date_dirs:
+            print("No date directories found in", ps.dataDir)
+            return
+            
+        print(f"Found {len(date_dirs)} date directories to process")
+        
+        # Check for and remove small files
+        small_files_found = []
+        for date_dir in date_dirs:
+            small_files = check_small_files(date_dir)
+            if small_files:
+                small_files_found.extend(small_files)
+        
+        if small_files_found:
+            print("\nWarning: Found and deleted the following small files (<1KB):")
+            for f, size in small_files_found:
+                print(f"  - {f} ({size} bytes)")
+            return
+        
+        # Process each date directory
+        for date_dir in date_dirs:
+            try:
+                process_date_directory(date_dir)
+            except Exception as e:
+                print(f"Error processing directory {date_dir}: {str(e)}")
+                continue
+
+    except Exception as e:
+        print(f"Fatal error in main: {str(e)}")
+        raise
 
 if __name__ == '__main__':
-    '''
-    Main driver.
-    '''
     main()
 
