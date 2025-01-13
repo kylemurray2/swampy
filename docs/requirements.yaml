@@ -8,29 +8,24 @@ name: swampy
 channels:
   - conda-forge
 dependencies:
-  - python=3.10  # assuming you're using python 3.8; adjust accordingly
+  - python=3.10
   - numpy
   - matplotlib
-  - os
   - rasterio
   - scipy
   - requests
-  - glob
-  - urllib
   - shapely
   - geopandas
   - pandas
   - cartopy
   - yaml
-  - argparse
-  - concurrent.futures
-  - multiprocessing
-  - pathlib
-  - collections
-  - itertools
-  - shutil
   - pystac-client
-
   - netcdf4
   - earthaccess
-
+  - contextily
+  - cdsapi
+  - xarray
+  - imageio
+  - scikit-image
+  - gdal
+  - pyproj

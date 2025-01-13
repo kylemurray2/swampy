@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 import os,shutil
-from swampy import download_dsw
+from swampy import setup_swampy
 
-swampyPath = download_dsw.__file__
+swampyPath = setup_swampy.__file__
 swampyPath = os.path.dirname(swampyPath)
 
 # If you want to ensure the output always ends with a '/'

@@ -17,8 +17,10 @@ from rasterio.merge import merge
 from rasterio.warp import calculate_default_transform, reproject, Resampling
 from collections import defaultdict
 from pathlib import Path
-from swampy import config
+import config
 import gc
+
+os.chdir('/Volumes/NAS_NC/haw/Documents/research/surfaceWater/westCoastData')
 
 def check_small_files(data_dir, min_size_bytes=1024):
     """Check for and delete files smaller than min_size_bytes (default 1KB)"""

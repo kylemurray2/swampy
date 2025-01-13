@@ -25,7 +25,11 @@ import cartopy.feature as cfeature
 import numpy as np
 from urllib.error import URLError
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from time import sleep
+from requests.exceptions import RequestException
+from tenacity import retry, stop_after_attempt, wait_exponential
 
+os.chdir('/Volumes/NAS_NC/haw/Documents/research/surfaceWater/westCoastData')
 nproc = int(os.cpu_count()-1)
 
 def filter_by_cloud_cover(item, threshold=10):
@@ -93,54 +97,43 @@ def check_file_exists(filename, data_dir):
     return False
 # ps = config.getPS()
 
-def search_dswx_data(date_range,intersects_geometry,cloudy_threshold,collections):
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=4, max=10),
+    reraise=True
+)
+def search_dswx_data(date_range, intersects_geometry, cloudy_threshold, collections):
     start, stop = date_range
+    date_range = f"{start.strftime('%Y-%m-%d')}T00:00:00Z/{stop.strftime('%Y-%m-%d')}T23:59:59Z"
     
+    print(f"\nDEBUG - search_dswx_data:")
+    print(f"Date range: {date_range}")
+    
+    stac_url = "https://cmr.earthdata.nasa.gov/cloudstac/POCLOUD"
+    client = Client.open(stac_url)
+    
+    try:
+        search = client.search(
+            collections=["OPERA_L3_DSWX-HLS_V1_1.0"],
+            intersects=intersects_geometry,
+            datetime=date_range,
+            max_items=100000
+        )
+        stac_results = list(search.get_items())
+        print(f"Number of STAC results: {len(stac_results)}")
+        
+        all_urls = []
+        for item in stac_results:
+            urls = return_granule(item)
+            all_urls.extend(urls)
+        
+        print(f"Number of URLs found: {len(all_urls)}")
+        return all_urls, stac_results
+    
+    except Exception as e:
+        print(f"Error during STAC search: {str(e)}")
+        raise
 
-    # Setup STAC API
-    stac = 'https://cmr.earthdata.nasa.gov/cloudstac/'  # CMR-STAC API Endpoint
-    api = Client.open(f'{stac}POCLOUD/')
-    
-    # Define search parameters
-    search_params = {
-        "collections": ps.collections,
-        "intersects": intersects_geometry,
-        "datetime": [start, stop],
-        "max_items": 100000
-    }
-    
-    print(f"Connecting to API for period {start} to {stop}...")
-    search_dswx = api.search(**search_params)
-    
-    # Return the collected items
-    # Filter cloudy days
-    
-    # print("Filtering cloudy days > " + str(cloudy_threshold) + "%...")
-    
-    # # Define the normal function
-    # def cloud_cover_filter(item):
-    #     return filter_by_cloud_cover(item, threshold=cloudy_threshold)
-    
-    # # Apply the filter using the defined function
-    # filtered_items = list(filter(cloud_cover_filter, search_dswx.item_collection())) 
-    
-
-    
-    # print(str(len(list(search_dswx.item_collection()))) + ' items were found.')
-    # print(str(len(filtered_items)) + ' items meet the cloud threshold')
-    
-    # filtered_urls = list(map(return_granule, filtered_items))
-    
-    all_items = list(search_dswx.item_collection())
-    all_urls = []
-    for item in all_items:
-        urls = return_granule(item)
-        all_urls.extend(urls)
-    
-    return all_urls, list(search_dswx.items())
-
-
-    
 def searchDSWx(ps):
     '''
     Searches DSWx data given polygon AOI and date range. 
@@ -150,21 +143,16 @@ def searchDSWx(ps):
         dswx_data_df: pandas dataframe for all search results
     '''
     
-    
-    already_dl_dates =[]# glob.glob('data/2???????')
-    if len(already_dl_dates)>0:
+    already_dl_dates = []  # glob.glob('data/2???????')
+    if len(already_dl_dates) > 0:
         already_dl_dates.sort()
-        # Extract the latest date from the already downloaded dates
-        last_date_str = already_dl_dates[-1][-8:]  # Assumes format 'data/YYYYMMDD'
+        last_date_str = already_dl_dates[-1][-8:]
         last_date = datetime.strptime(last_date_str, '%Y%m%d')
-        # Set the new start date to the day after the last downloaded date
         start_date = last_date + timedelta(days=1)
-        # start_date = datetime(int(ps.date_start[0:4]), int(ps.date_start[4:6]), int(ps.date_start[6:8]))   
-        print(f'already found the following dates { already_dl_dates}.  Setting new start date to {start_date}.')
+        print(f'already found the following dates {already_dl_dates}. Setting new start date to {start_date}.')
     else:
         start_date = datetime(int(ps.date_start[0:4]), int(ps.date_start[4:6]), int(ps.date_start[6:8]))    
     
-    # stop_date = datetime.today()  
     if ps.date_stop is None:
         stop_date = datetime.today()  
     else:
@@ -173,53 +161,59 @@ def searchDSWx(ps):
     # Convert the wkt polygon to a Shapely Polygon
     aoi = wkt.loads(ps.polygon)
     intersects_geometry = aoi.__geo_interface__
-    
+
     # Calculate the total number of days and the interval
     total_days = (stop_date - start_date).days
-    num_workers = 10
+    num_workers = 3  # Reduced from 10
     
-    interval = total_days // num_workers
-    if interval == 0:
-        interval = 1  # Ensure at least one day is covered
+    interval = max(1, total_days // num_workers)
     
-    # Generate new start and stop dates for each search
+    # Generate date ranges as tuples of datetime objects
     date_ranges = []
-    for i in range(num_workers):
-        new_start = start_date + timedelta(days=i * interval)
-        # Ensure the last interval ends exactly on the stop_date
-        if i == num_workers - 1:
-            new_stop = stop_date
-        else:
-            new_stop = start_date + timedelta(days=(i + 1) * interval - 1)
-        date_ranges.append((new_start, new_stop))
+    current_date = start_date
+    while current_date < stop_date:
+        range_end = min(current_date + timedelta(days=interval), stop_date)
+        date_ranges.append((current_date, range_end))
+        current_date = range_end + timedelta(days=1)
     
-    # Display the new date ranges
+    # Display the date ranges
     for start, stop in date_ranges:
         print("Start:", start.strftime("%Y-%m-%d"), "Stop:", stop.strftime("%Y-%m-%d"))
-    
     
     filtered_urls_list = []
     dswx_data = []
     
+    print("\nDEBUG - searchDSWx:")
+    print(f"Number of date ranges to process: {len(date_ranges)}")
     
-    # Number of parallel workers (you can adjust this based on your needs and resources)
-
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
-        # Adjust the executor.submit call to include the additional parameters
-        future_to_date_range = {
-            executor.submit(search_dswx_data, date_range, intersects_geometry, ps.cloudy_threshold,ps.collections): date_range 
-            for date_range in date_ranges
-        }
+        future_to_date_range = {}
+        
+        # Submit jobs with delay between submissions
+        for start, stop in date_ranges:
+            future = executor.submit(
+                search_dswx_data, 
+                (start, stop),
+                intersects_geometry, 
+                ps.cloudy_threshold,
+                ps.collections
+            )
+            future_to_date_range[future] = (start, stop)
+            sleep(2)  # Add delay between submissions
         
         # Process the results as they complete
         for future in as_completed(future_to_date_range):
             date_range = future_to_date_range[future]
             try:
                 f_urls, data_list = future.result()
+                print(f"DEBUG - Results for {date_range}:")
+                print(f"Number of URLs: {len(f_urls)}")
+                print(f"Number of data items: {len(data_list)}")
                 filtered_urls_list.append(f_urls)
                 dswx_data.append(data_list)
             except Exception as exc:
-                print(f'{date_range} generated an exception: {exc}')
+                print(f'ERROR - {date_range} generated an exception: {exc}')
+                # Optionally retry failed requests here
     
 
     # Create a new list to hold all items from all collections
@@ -382,7 +376,7 @@ def plot_frames(dswx_data,aoi):
     import cartopy.io.img_tiles as cimgt
    
     bg='World_Shaded_Relief'
-    zoomLevel = 10
+    zoomLevel = 8
     url = 'https://server.arcgisonline.com/ArcGIS/rest/services/' + bg + '/MapServer/tile/{z}/{y}/{x}.jpg'
     image = cimgt.GoogleTiles(url=url)
     ax.add_image(image, zoomLevel,zorder=1) #zoom level
