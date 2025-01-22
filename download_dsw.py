@@ -25,11 +25,12 @@ import cartopy.feature as cfeature
 import numpy as np
 from urllib.error import URLError
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from time import sleep
-from requests.exceptions import RequestException
-from tenacity import retry, stop_after_attempt, wait_exponential
 
-os.chdir('/Volumes/NAS_NC/haw/Documents/research/surfaceWater/westCoastData')
+#os.chdir('/Volumes/NAS_NC/haw/Documents/research/surfaceWater/westCoastData')
+
+os.chdir('/Volumes/NAS_NC/haw/Documents/research/surfaceWater/napa_marshes')
+
+
 nproc = int(os.cpu_count()-1)
 
 def filter_by_cloud_cover(item, threshold=10):
@@ -97,43 +98,32 @@ def check_file_exists(filename, data_dir):
     return False
 # ps = config.getPS()
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=4, max=10),
-    reraise=True
-)
 def search_dswx_data(date_range, intersects_geometry, cloudy_threshold, collections):
     start, stop = date_range
-    date_range = f"{start.strftime('%Y-%m-%d')}T00:00:00Z/{stop.strftime('%Y-%m-%d')}T23:59:59Z"
-    
-    print(f"\nDEBUG - search_dswx_data:")
-    print(f"Date range: {date_range}")
+    date_range = f"{start:%Y-%m-%d}/{stop:%Y-%m-%d}"
+
     
     stac_url = "https://cmr.earthdata.nasa.gov/cloudstac/POCLOUD"
     client = Client.open(stac_url)
+    search = client.search(
+        collections=["OPERA_L3_DSWX-HLS_V1_1.0"],
+        intersects=intersects_geometry,
+        datetime=date_range,
+        max_items=100000
+    )
+    stac_results = list(search.get_items())
+    print(f"Number of STAC results: {len(stac_results)}")
     
-    try:
-        search = client.search(
-            collections=["OPERA_L3_DSWX-HLS_V1_1.0"],
-            intersects=intersects_geometry,
-            datetime=date_range,
-            max_items=100000
-        )
-        stac_results = list(search.get_items())
-        print(f"Number of STAC results: {len(stac_results)}")
-        
-        all_urls = []
-        for item in stac_results:
-            urls = return_granule(item)
-            all_urls.extend(urls)
-        
-        print(f"Number of URLs found: {len(all_urls)}")
-        return all_urls, stac_results
+    all_urls = []
+    for item in stac_results:
+        urls = return_granule(item)
+        all_urls.extend(urls)
     
-    except Exception as e:
-        print(f"Error during STAC search: {str(e)}")
-        raise
+    print(f"Number of URLs found: {len(all_urls)}")
+    return all_urls, stac_results
 
+
+    
 def searchDSWx(ps):
     '''
     Searches DSWx data given polygon AOI and date range. 
@@ -164,7 +154,7 @@ def searchDSWx(ps):
 
     # Calculate the total number of days and the interval
     total_days = (stop_date - start_date).days
-    num_workers = 3  # Reduced from 10
+    num_workers = 10
     
     interval = max(1, total_days // num_workers)
     
@@ -176,30 +166,37 @@ def searchDSWx(ps):
         date_ranges.append((current_date, range_end))
         current_date = range_end + timedelta(days=1)
     
-    # Display the date ranges
+    # Display the date ranges and ensure no gaps
+    prev_date = None
     for start, stop in date_ranges:
+        if prev_date is not None and start != prev_date + timedelta(days=1):
+            print(f"WARNING: Gap between {prev_date.strftime('%Y-%m-%d')} and {start.strftime('%Y-%m-%d')}")
         print("Start:", start.strftime("%Y-%m-%d"), "Stop:", stop.strftime("%Y-%m-%d"))
-    
+        prev_date = stop
+
     filtered_urls_list = []
     dswx_data = []
     
     print("\nDEBUG - searchDSWx:")
     print(f"Number of date ranges to process: {len(date_ranges)}")
     
+    # Ensure date ranges don't overlap and cover full period
+    total_days_covered = sum((stop - start).days + 1 for start, stop in date_ranges)
+    expected_days = (stop_date - start_date).days + 1
+    if total_days_covered != expected_days:
+        print(f"WARNING: Date ranges cover {total_days_covered} days but should cover {expected_days} days")
+    
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
-        future_to_date_range = {}
-        
-        # Submit jobs with delay between submissions
-        for start, stop in date_ranges:
-            future = executor.submit(
+        future_to_date_range = {
+            executor.submit(
                 search_dswx_data, 
                 (start, stop),
                 intersects_geometry, 
                 ps.cloudy_threshold,
                 ps.collections
-            )
-            future_to_date_range[future] = (start, stop)
-            sleep(2)  # Add delay between submissions
+            ): (start, stop) 
+            for start, stop in date_ranges
+        }
         
         # Process the results as they complete
         for future in as_completed(future_to_date_range):
@@ -213,8 +210,6 @@ def searchDSWx(ps):
                 dswx_data.append(data_list)
             except Exception as exc:
                 print(f'ERROR - {date_range} generated an exception: {exc}')
-                # Optionally retry failed requests here
-    
 
     # Create a new list to hold all items from all collections
     filtered_urls = []
@@ -399,26 +394,31 @@ def extract_date_from_filename(filename):
 
 
 def organize_directories(data_dir):
-    tif_files = [f for f in os.listdir(data_dir) if f.endswith('.tif')]
-
-    # Extract unique dates from filenames, skipping files without dates
-    unique_dates = set()
-    for f in tif_files:
-        date = extract_date_from_filename(f)
-        if date:
-            unique_dates.add(date)
-
-    # Create directories for each unique date
-    for date in unique_dates:
-        os.makedirs(os.path.join(data_dir, date), exist_ok=True)
-
-    # Move the .tif files to the respective directories
-    for f in tif_files:
-        date = extract_date_from_filename(f)
-        if date:  # Only move files that have a valid date
-            destination = os.path.join(data_dir, date, f)
-            source = os.path.join(data_dir, f)
-            os.rename(source, destination)
+    """Organize .tif files into date-based directories."""
+    # Get all tif files and their dates in a single pass
+    moves = []
+    for f in os.listdir(data_dir):
+        if not f.endswith('.tif'):
+            continue
+            
+        date = re.search(r'(\d{8})', f)
+        if not date:
+            continue
+            
+        date_str = date.group(1)
+        date_dir = os.path.join(data_dir, date_str)
+        
+        # Create directory if it doesn't exist
+        os.makedirs(date_dir, exist_ok=True)
+        
+        # Store move operation
+        source = os.path.join(data_dir, f)
+        dest = os.path.join(date_dir, f)
+        moves.append((source, dest))
+    
+    # Perform all moves in batch
+    for source, dest in moves:
+        os.rename(source, dest)
 
 
 def main():

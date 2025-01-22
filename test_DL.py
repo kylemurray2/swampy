@@ -5,7 +5,7 @@ from pystac_client import Client
 earthaccess.login()
 
 # Define search parameters
-temporal_range = ("2023-08-18", "2023-08-23")
+temporal_range = ("2024-08-18", "2024-10-23")
 # For STAC
 bbox = [-160.0, 18.5, -154.5, 22.5]
 # For earthaccess (west, south, east, north)

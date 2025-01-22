@@ -19,8 +19,12 @@ from collections import defaultdict
 from pathlib import Path
 import config
 import gc
+import multiprocessing as mp
+from functools import partial
+import numpy as np
 
-os.chdir('/Volumes/NAS_NC/haw/Documents/research/surfaceWater/westCoastData')
+#os.chdir('/Volumes/NAS_NC/haw/Documents/research/surfaceWater/westCoastData')
+os.chdir('/Volumes/NAS_NC/haw/Documents/research/surfaceWater/napa_marshes')
 
 def check_small_files(data_dir, min_size_bytes=1024):
     """Check for and delete files smaller than min_size_bytes (default 1KB)"""
@@ -144,11 +148,23 @@ def reprojectDSWx(epsg_code, file_batch, output_filename, colormap=None, bounds=
 
     return output_filename
 
+def process_batch(batch_info):
+    """Process a single batch of files (to be run in parallel)"""
+    files, crs, layer_type, output_file, layer_bounds, dst_transform, width, height = batch_info
+    
+    colormap = None
+    if layer_type == 'WTR':
+        with rasterio.open(files[0]) as src:
+            colormap = src.colormap(1)
+    
+    return reprojectDSWx(crs, files, output_file, colormap, 
+                        bounds=layer_bounds, dst_transform=dst_transform,
+                        dst_width=width, dst_height=height)
+
 def process_date_directory(date_dir):
     """Process a single date directory"""
     print(f"\nProcessing directory: {date_dir}")
     
-    # Organize files by CRS and type
     files_by_crs = organize_files(date_dir)
     if not files_by_crs:
         print(f"No files found in {date_dir}")
@@ -160,91 +176,81 @@ def process_date_directory(date_dir):
         mosaic_folder = Path(date_dir)/crs/'mosaics'
         mosaic_folder.mkdir(parents=True, exist_ok=True)
         
-        # Process each layer type independently
         for layer_type in ['WTR', 'WTR-2', 'CONF']:
             files = files_by_type[layer_type]
             if not files:
-                print(f"No {layer_type} files found in {crs}")
                 continue
             
-            # Calculate bounds for this layer type
+            # Calculate bounds once for all files
             layer_bounds = None
-            for file in files:
-                try:
-                    with rasterio.open(file) as src:
-                        if src.width > 0 and src.height > 0:
-                            if layer_bounds is None:
-                                layer_bounds = src.bounds
-                            else:
-                                layer_bounds = (
-                                    min(layer_bounds[0], src.bounds[0]),  # left
-                                    min(layer_bounds[1], src.bounds[1]),  # bottom
-                                    max(layer_bounds[2], src.bounds[2]),  # right
-                                    max(layer_bounds[3], src.bounds[3])   # top
-                                )
-                except Exception as e:
-                    print(f"Warning: Error reading file {file}: {str(e)}")
-                    continue
+            with rasterio.Env():
+                for file in files:
+                    try:
+                        with rasterio.open(file) as src:
+                            bounds = src.bounds
+                            layer_bounds = bounds if layer_bounds is None else (
+                                min(layer_bounds[0], bounds[0]),
+                                min(layer_bounds[1], bounds[1]),
+                                max(layer_bounds[2], bounds[2]),
+                                max(layer_bounds[3], bounds[3])
+                            )
+                    except Exception as e:
+                        print(f"Warning: Error reading file {file}: {str(e)}")
 
             if layer_bounds is None:
-                print(f"No valid bounds found for {layer_type}")
                 continue
 
-            print(f"Processing {len(files)} {layer_type} files")
-            print(f"{layer_type} bounds: {layer_bounds}")
-            
-            # Calculate transform for this layer
+            # Calculate transform once
             with rasterio.open(files[0]) as src:
                 dst_transform, width, height = calculate_default_transform(
-                    src_crs=crs,
-                    dst_crs='EPSG:4326',
-                    width=src.width,
-                    height=src.height,
-                    left=layer_bounds[0],
-                    bottom=layer_bounds[1],
-                    right=layer_bounds[2],
-                    top=layer_bounds[3]
+                    src_crs=crs, dst_crs='EPSG:4326',
+                    width=src.width, height=src.height,
+                    left=layer_bounds[0], bottom=layer_bounds[1],
+                    right=layer_bounds[2], top=layer_bounds[3]
                 )
             
-            # Process in batches
-            batch_size = 4
-            output_files = []
+            # Prepare batches for parallel processing
+            batch_size = max(1, len(files) // mp.cpu_count())
+            batches = []
             
             for i in range(0, len(files), batch_size):
                 batch = files[i:i + batch_size]
                 output_file = mosaic_folder/f'temp_{crs}_{layer_type}_{i//batch_size}.tif'
-                
-                # Get colormap from first file if WTR
-                colormap = None
-                if layer_type == 'WTR':
-                    with rasterio.open(batch[0]) as src:
-                        colormap = src.colormap(1)
-                
-                result = reprojectDSWx(crs, batch, output_file, colormap, 
-                                     bounds=layer_bounds, dst_transform=dst_transform,
-                                     dst_width=width, dst_height=height)
-                if result:
-                    output_files.append(result)
-                gc.collect()
+                batches.append((
+                    batch, crs, layer_type, output_file, 
+                    layer_bounds, dst_transform, width, height
+                ))
             
-            # Create final mosaic for this type
+            # Process batches in parallel
+            with mp.Pool() as pool:
+                output_files = []
+                for result in pool.imap_unordered(process_batch, batches):
+                    if result is not None:
+                        output_files.append(result)
+                    # Optional: Add progress indication
+                    print(".", end="", flush=True)
+                print()  # New line after progress dots
+            
+            # Create final mosaic
             if output_files:
                 final_output = Path(date_dir)/f'mosaic_{layer_type.lower()}.tif'
                 print(f"Creating final {layer_type} mosaic...")
                 
-                with rasterio.open(output_files[0]) as src:
-                    profile = src.profile.copy()
-                    colormap = src.colormap(1) if layer_type == 'WTR' else None
-                    
-                    with rasterio.open(final_output, 'w', **profile) as dst:
-                        data, _ = merge(output_files, method='min')
-                        dst.write(data[0], 1)
-                        if colormap:
-                            dst.write_colormap(1, colormap)
-                        del data
-                        gc.collect()
+                with rasterio.Env():
+                    with rasterio.open(output_files[0]) as src:
+                        profile = src.profile.copy()
+                        colormap = src.colormap(1) if layer_type == 'WTR' else None
+                        
+                        with rasterio.open(final_output, 'w', **profile) as dst:
+                            data, _ = merge(output_files, method='min')
+                            dst.write(data[0], 1)
+                            if colormap:
+                                dst.write_colormap(1, colormap)
+                            del data
                 
-                print(f"{layer_type} mosaic created successfully")
+                # Clean up temporary files
+                for temp_file in output_files:
+                    Path(temp_file).unlink()
 
 def main():
     try:
