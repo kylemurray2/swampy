@@ -26,10 +26,6 @@ import numpy as np
 from urllib.error import URLError
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-#os.chdir('/Volumes/NAS_NC/haw/Documents/research/surfaceWater/westCoastData')
-
-os.chdir('/Volumes/NAS_NC/haw/Documents/research/surfaceWater/napa_marshes')
-
 
 nproc = int(os.cpu_count()-1)
 
@@ -98,21 +94,44 @@ def check_file_exists(filename, data_dir):
     return False
 # ps = config.getPS()
 
+
+# collections = ps.collections
+
 def search_dswx_data(date_range, intersects_geometry, cloudy_threshold, collections):
     start, stop = date_range
     date_range = f"{start:%Y-%m-%d}/{stop:%Y-%m-%d}"
 
-    
     stac_url = "https://cmr.earthdata.nasa.gov/cloudstac/POCLOUD"
     client = Client.open(stac_url)
-    search = client.search(
-        collections=["OPERA_L3_DSWX-HLS_V1_1.0"],
-        intersects=intersects_geometry,
-        datetime=date_range,
-        max_items=100000
-    )
-    stac_results = list(search.get_items())
-    print(f"Number of STAC results: {len(stac_results)}")
+    
+    max_retries = 3
+    retry_delay = 5  # seconds
+    success = False
+    
+    for attempt in range(max_retries):
+        try:
+            # Use intersects parameter with the GeoJSON geometry
+            search = client.search(
+                collections=collections,
+                intersects=intersects_geometry,  # Use the original polygon geometry
+                datetime=date_range,
+                max_items=100000
+            )
+            stac_results = list(search.get_items())
+            print(f"Number of STAC results: {len(stac_results)}")
+            success = True
+            break
+        except Exception as e:
+            print(f"Attempt {attempt+1}/{max_retries} failed with error: {str(e)}")
+            if attempt < max_retries - 1:
+                print(f"Retrying in {retry_delay} seconds...")
+                import time
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+    
+    if not success:
+        print(f"All retries failed for date range {date_range}")
+        return [], []
     
     all_urls = []
     for item in stac_results:
@@ -146,12 +165,24 @@ def searchDSWx(ps):
     if ps.date_stop is None:
         stop_date = datetime.today()  
     else:
-        stop_date = datetime(int(ps.date_stop[0:4]), int(ps.date_stop[4:6]), int(ps.date_stop[6:8]))    
+        # Convert string to datetime
+        stop_date = datetime(int(ps.date_stop[0:4]), int(ps.date_stop[4:6]), int(ps.date_stop[6:8]))
+        # Check if stop_date is in the future, if yes, use today's date
+        today = datetime.today()
+        if stop_date > today:
+            print(f"Date stop {stop_date.strftime('%Y-%m-%d')} is in the future. Setting to today's date: {today.strftime('%Y-%m-%d')}")
+            stop_date = today
 
-    # Convert the wkt polygon to a Shapely Polygon
-    aoi = wkt.loads(ps.polygon)
+    # Load polygon from map.wkt file
+    with open('map.wkt', 'r') as f:
+        polygon_wkt = f.read().strip()
+    aoi = wkt.loads(polygon_wkt)
+    
+    # Use the original polygon geometry for search
     intersects_geometry = aoi.__geo_interface__
-
+    
+    print(f"Using original polygon geometry for search")
+    
     # Calculate the total number of days and the interval
     total_days = (stop_date - start_date).days
     num_workers = 10
@@ -185,6 +216,8 @@ def searchDSWx(ps):
     expected_days = (stop_date - start_date).days + 1
     if total_days_covered != expected_days:
         print(f"WARNING: Date ranges cover {total_days_covered} days but should cover {expected_days} days")
+    
+
     
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         future_to_date_range = {
@@ -224,10 +257,8 @@ def searchDSWx(ps):
             dswx_data_a.append(ds)
     dswx_data = dswx_data_a
 
-    # Convert the wkt polygon to a Shapely Polygon
-    aoi = wkt.loads(ps.polygon)
-
-    plot_frames(dswx_data,aoi)
+    if dswx_data:  # Only plot if there's data
+        plot_frames(dswx_data, aoi)
 
 
     print(len(filtered_urls))
@@ -272,8 +303,13 @@ def dlDSWx(urls, ps, dataDir):
     '''
     Download the DSWx files given urls, only if all three asset types don't exist
     '''
+    # Set the data directory for DSW data
+    dataDir = './data/DSW'
+    
+    # Create directory if it doesn't exist
     if not os.path.isdir(dataDir):
-        os.mkdir(dataDir)
+        os.makedirs(dataDir, exist_ok=True)
+        print(f"Created directory: {dataDir}")
 
     # Group URLs by their base filename (without asset type and band number)
     grouped_files = {}
@@ -343,7 +379,7 @@ def dlDSWx(urls, ps, dataDir):
                     os.remove(fname)
                 except OSError:
                     print(f"Could not remove corrupted file: {fname}")
-def plot_frames(dswx_data,aoi):
+def plot_frames(dswx_data, aoi):
     '''
     Plot the footprints from the DSWx search results
     '''
@@ -392,7 +428,7 @@ def extract_date_from_filename(filename):
     match = re.search(r'(\d{8})', filename)
     return match.group(1) if match else None
 
-
+#
 def organize_directories(data_dir):
     """Organize .tif files into date-based directories."""
     # Get all tif files and their dates in a single pass
@@ -424,17 +460,25 @@ def organize_directories(data_dir):
 def main():
 
     ps = config.getPS()
+    
+    # Set the data directory for DSW data
+    ps.dataDir = './data/DSW'
+    
+    # Create directory if it doesn't exist
+    if not os.path.isdir(ps.dataDir):
+        os.makedirs(ps.dataDir, exist_ok=True)
+        print(f"Created directory: {ps.dataDir}")
 
     # Get the filtered list of urls
-    filtered_urls,dswx_data_df = searchDSWx(ps)
+    filtered_urls, dswx_data_df = searchDSWx(ps)
     
     # Download the files
-    dlDSWx(filtered_urls,ps,ps.dataDir)
+    dlDSWx(filtered_urls, ps, ps.dataDir)
     
     # Organize files into their respective dates directories
     organize_directories(ps.dataDir)
 
-    return filtered_urls,dswx_data_df
+    return filtered_urls, dswx_data_df
 
 
 if __name__ == '__main__':

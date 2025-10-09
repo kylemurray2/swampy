@@ -1,3 +1,7 @@
+'''
+This script is used to load the SWOT L2 HR Raster NetCDF files and extract the Water Surface Elevation (WSE) time series for a given latitude/longitude.
+'''
+
 import xarray as xr
 import matplotlib.pyplot as plt
 import os
@@ -167,11 +171,11 @@ def extract_wse_time_series(lat, lon, matching_files, folder_path):
 
 # Example usage
 if __name__ == "__main__":
-    folder_path = './swot/RasterData'  # Path to the folder containing NetCDF files
+    folder_path = './data/swot/RasterData'  # Path to the folder containing NetCDF files
     # Define the UTM zone you are working in
-    utm_proj = Proj(proj="utm", zone=10, south=True, ellps="WGS84")
-    latitude, longitude = 34.564, -119.894
-
+    # utm_proj = Proj(proj="utm", zone=10, south=True, ellps="WGS84")
+    # latitude, longitude = 38.27, -121.68
+    latitude, longitude = 34.58555, -119.9792  # Cachuma Reservoir, California
     # Filter the files based on UTM zone overlap with the lat/lon
     matching_files = filter_files_by_utm(latitude, longitude, folder_path)
 

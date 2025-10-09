@@ -14,13 +14,17 @@ from swampy import water_elevation,config
 
 ps = config.getPS()
 
-def remove_outliers(data,n_sigma=3):
+def remove_outliers(data, n_sigma=3):
     '''
     remove values > mean(data) +/- n_sigma 
     '''
-    mean = np.mean(data)
-    std = np.std(data)
-    mask = (data > mean - n_sigma*std) & (data < mean + 3*std)
+    # Check if data is empty or all NaN
+    if len(data) == 0 or np.all(np.isnan(data)):
+        return data
+        
+    mean = np.nanmean(data)
+    std = np.nanstd(data)
+    mask = (data > mean - n_sigma*std) & (data < mean + n_sigma*std)
     filtered_data = data[mask]
     return filtered_data
 
@@ -61,41 +65,54 @@ elevations_modes_clean = remove_outliers(elevations_modes,n_sigma=3)
 
 # Get measurements and clean up data
 data = pd.read_csv(ps.cdec_levels_csv)
-# columns_to_convert = ['RES ELE FEET']
-
-# for col in columns_to_convert:
-#     data[col] = clean_convert(data[col])
 
 # Convert dates to datetime
 data['Datetime'] = pd.to_datetime(data['DATE'])
+
+# Clean up the elevation data properly
+data.loc[data['RES ELE FEET'] == 0, 'RES ELE FEET'] = np.nan
 data['RES ELE FEET'] = pd.to_numeric(data['RES ELE FEET'], errors='coerce')
+data['RES ELE FEET'] = data['RES ELE FEET'] * 0.3048  # feet to meters
 
-data['RES ELE FEET'][data['RES ELE FEET']==0] = np.nan
-data['RES ELE FEET']*=.3048 # feet to meters
-
-offset = 4.6
+offset = -1
 offset_mode = 2
 
 std_err =1.96*( elevation_data_dict['elevations_std']/np.sqrt(elevation_data_dict['n_pixels']))
 
 
-wse_df = pd.read_csv('wse_data.csv')
-wse_df['date'] = pd.to_datetime(wse_df['date'], format='%Y-%m-%d')
+# Load SWOT water surface elevation data
+wse_df = pd.read_csv('wse_raster_time_series.csv')
+# First parse the full datetime string
+wse_df['date'] = pd.to_datetime(wse_df['date'])
+# Then if you want just the date component without time
+# wse_df['date'] = wse_df['date'].dt.date
 
 
 # Plotting
 plt.figure(figsize=(10, 6))
 plt.plot(data['Datetime'], data['RES ELE FEET'], '.',label='in situ measurements')
 plt.errorbar(elevation_data_dict['date_objects'], elevation_data_dict['elevations_medians']+offset, yerr=std_err, fmt='o',label='DSW median',capsize=5,color='green',ecolor='gray',linewidth=.5)
-plt.plot(wse_df['date'], wse_df['wse'], marker='o',label='SWOT',color='tab:red')
+plt.plot(wse_df['date'], wse_df['wse'], marker='o', markersize=8, linestyle='None', label='SWOT', color='tab:red',zorder=10)
 
 # plt.errorbar(elevation_data_dict['date_objects'], elevation_data_dict['elevations_modes']+offset_mode, yerr=elevation_data_dict['elevations_std'], fmt='o',label='mode',capsize=5,color='orange',ecolor='red')
 # plt.axhline(y=DEM_water_elevation,linestyle='-')
 plt.title('Time Series of Water Levels')
 plt.xlabel('Datetime')
-plt.ylabel('Measured Value (meters)')
+plt.ylabel('Elevation (meters)')
 plt.grid(True)
 plt.tight_layout()
 plt.legend()
+
+# After creating the plot, add a detailed caption
+plt.figtext(0.5, 0.01, 
+            "Figure 1: Comparison of water surface elevation measurements from multiple sources over time. "
+            "Blue dots show in-situ gauge measurements from CDEC. Green points with error bars represent "
+            "median water elevations derived from Dynamic Surface Water (DSW) with 95% confidence intervals. "
+            "Red markers show SWOT satellite altimetry data. All elevations are in meters.",
+            ha="center", fontsize=9, wrap=True)
+
+# Adjust the bottom margin to make room for the caption
+plt.subplots_adjust(bottom=0.15)
+
 plt.show()
 

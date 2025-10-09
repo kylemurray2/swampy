@@ -1,14 +1,18 @@
 # SWAMPy parameters
 #
 # You can get a wkt polygon here for aoi: http://geojson.io/#new&map=9.01/33.3672/-115.7501
+# Save the polygon to map.wkt
 # Lidar DEMs can be found here: https://portal.opentopography.org/datasets
 #
-polygon : POLYGON ((-120.87078313029996 35.44737924782416, -120.86229270491562 35.46039788833943, -120.8652893256397 35.46952776125599, -120.8727253844726 35.471380727747345, -120.8745011597164 35.46812670946504, -120.87544454031466 35.46247705943982, -120.87339130018931 35.45596817070667, -120.88515581117926 35.45827346236105, -120.888762854643 35.447560076699816, -120.87472313162183 35.44543531174995, -120.87078313029996 35.44737924782416))
-date_start: '20220501'
-date_stop: '20290601'
-collections : ["OPERA_L3_DSWX-HLS_V1_1.0"]
-dataDir : ./data # it will make the directory if it doesn't exist
-workdir : ./
+polygon :
+date_start: '20230301'
+date_stop:
+collections : ["OPERA_L3_DSWX-HLS_V1_1.0","OPERA_L3_DSWX-S1_V1_1.0"]
+swot_collections : ["SWOT_L2_HR_Raster_2.0"]
+dataDir_dsw : ./data/DSW # it will make the directory if it doesn't exist
+dataDir_swot : ./data/swot # it will make the directory if it doesn't exist
 demPath : none # Leave none if you don't already have a DEM. It will download a 30 m Copernicus DEM.
+dataDir_usgs : ./data/usgs_dsw
+workdir : ./
 cloudy_threshold : 100
 water_levels_csv : none # Optional csv file of water levels from https://cdec.water.ca.gov/
