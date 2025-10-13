@@ -10,6 +10,7 @@ import numpy as np
 import os,sys
 import yaml
 import argparse
+from pathlib import Path
 
 
 
@@ -30,6 +31,20 @@ def getPS(directory='.'):
     if os.path.isfile(yaml_file):
         print('Parsing yaml file and updating ps namespace...')
         params = load_yaml_to_namespace(yaml_file)
+        
+        # Resolve paths relative to the params.yaml file's location
+        param_dir = Path(directory).resolve()
+        paths_to_resolve = [
+            'dataDir_dsw', 'dataDir_swot', 'demPath', 
+            'dataDir_usgs', 'workdir', 'water_levels_csv'
+        ]
+        for path_key in paths_to_resolve:
+            if hasattr(params, path_key):
+                value = getattr(params, path_key)
+                # Don't resolve 'none', empty strings, or absolute paths
+                if value and isinstance(value, str) and value.lower() != 'none' and not os.path.isabs(value):
+                    resolved_path = param_dir / value
+                    setattr(params, path_key, str(resolved_path.resolve()))
         
         # Load the ps namespace with error checking
         ps_path = os.path.join(directory, 'ps.npy')

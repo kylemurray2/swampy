@@ -28,7 +28,10 @@ download_dsw.py
 
 stitch_dsw.py   
    > Stitches files together within each date if there is more than one file  
-    
+
+
+python -m usgs.stitch_dsw_usgs --workers 20
+
 water_elevation.py  
    > For each date, estimate the elevation of the water based on the surface   
     water extent and where the edges intersect a DEM.  

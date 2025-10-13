@@ -21,6 +21,37 @@ import re
 import tarfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+SLC_OFF_CUTOFF = "20030531"
+LANDSAT7_PREFIXES = ("LT07", "LE07")
+
+
+def parse_date_from_identifier(identifier):
+    if not identifier:
+        return None
+    match = re.search(r"_(\d{8})_", identifier)
+    if match:
+        return match.group(1)
+    return None
+
+
+def is_landsat7(identifier):
+    if not identifier:
+        return False
+    token = identifier.split('_')[0]
+    return any(token.startswith(prefix) for prefix in LANDSAT7_PREFIXES)
+
+
+def is_slc_off_scene(identifier, acquisition_date=None):
+    if not is_landsat7(identifier):
+        return False
+
+    date_str = acquisition_date or parse_date_from_identifier(identifier)
+    if not date_str:
+        return False
+
+    normalized = date_str.replace('-', '')
+    return normalized >= SLC_OFF_CUTOFF
+
 class DSWEDownloader:
     def __init__(self, username, token):
         self.username = username
@@ -850,6 +881,45 @@ def read_credentials():
         print(f"Error reading credentials file: {str(e)}")
         return None, None
 
+def get_scene_acquisition(scene):
+    if not scene:
+        return None
+
+    acq = scene.get('acquisitionDate') or scene.get('Acquisition Date')
+    if acq:
+        return acq
+
+    metadata = scene.get('metadata') or scene.get('Metadata') or []
+    for field in metadata:
+        if field.get('fieldName') == 'Acquisition Date':
+            return field.get('value')
+
+    return None
+
+
+def filter_slc_off_scenes(scenes, verbose=True):
+    if not scenes:
+        return [], []
+
+    filtered = []
+    skipped = []
+
+    for scene in scenes:
+        entity_id = scene.get('entityId') or scene.get('displayId') or ''
+        acq = get_scene_acquisition(scene)
+        if is_slc_off_scene(entity_id, acq):
+            if verbose:
+                date_str = acq or parse_date_from_identifier(entity_id) or 'unknown date'
+                print(
+                    f"- Skipping Landsat 7 scene {entity_id} ({date_str}) due to SLC-off gaps"
+                )
+            skipped.append(scene)
+            continue
+        filtered.append(scene)
+
+    return filtered, skipped
+
+
 def main():
     """Main function to download DSWE data"""
     import argparse
@@ -939,11 +1009,13 @@ def main():
                             for row in reader:
                                 entity_id = row.get('Entity ID') or row.get('DSWE Tile Identifier')
                                 display_id = row.get('Display ID') or entity_id
+                                acquisition_date = row.get('Acquisition Date') or row.get('Date Acquired')
 
                                 if entity_id:
                                     scenes.append({
                                         'entityId': entity_id,
-                                        'displayId': display_id
+                                        'displayId': display_id,
+                                        'acquisitionDate': acquisition_date,
                                     })
 
                         csv_read_success = True
@@ -963,7 +1035,11 @@ def main():
                     print("\n⚠ No valid Entity IDs found in the CSV file. Nothing to download.")
                     return
 
-                print(f"  Found {len(scenes)} scenes listed in CSV")
+                before_filter = len(scenes)
+                scenes, skipped_slc = filter_slc_off_scenes(scenes)
+                print(f"  Found {before_filter} scenes listed in CSV")
+                if skipped_slc:
+                    print(f"  Skipped {len(skipped_slc)} Landsat 7 SLC-off scenes from CSV")
             except FileNotFoundError:
                 print(f"\n✗ CSV file not found: {args.csv}")
                 return
@@ -988,7 +1064,14 @@ def main():
                 print("Try adjusting the bounding box or date range.")
                 return
 
-            print(f"\n✓ Found {len(scenes)} DSWE scenes")
+            scenes, skipped_slc = filter_slc_off_scenes(scenes)
+            if not scenes:
+                print("\n⚠ All candidate scenes were Landsat 7 SLC-off acquisitions. No downloads queued.")
+                return
+
+            print(f"\n✓ Found {len(scenes)} DSWE scenes after filtering SLC-off acquisitions")
+            if skipped_slc:
+                print(f"  Skipped {len(skipped_slc)} Landsat 7 SLC-off scenes")
 
             # Export scene list to CSV for reference
             csv_file = "bay_area_dswe_scenes_2020.csv"
@@ -1003,6 +1086,11 @@ def main():
             entity_id = scene.get('entityId')
             if not entity_id:
                 missing_ids += 1
+                continue
+            if is_slc_off_scene(entity_id, scene.get('acquisitionDate')):
+                print(
+                    f"- Skipping {entity_id} (acquired {scene.get('acquisitionDate')}) due to Landsat 7 SLC-off"
+                )
                 continue
             scene_ids.append(entity_id)
             display_lookup[entity_id] = scene.get('displayId', entity_id)
