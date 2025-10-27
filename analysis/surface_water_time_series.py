@@ -271,6 +271,32 @@ def calculate_water_body_metrics(
 ) -> WaterBodyMetrics:
     """Calculate comprehensive water body metrics for a single month."""
     
+    # Handle grid mismatch - align water_masks to monthly_data if needed
+    if monthly_data.shape != water_masks["permanent"].shape:
+        # Reproject water masks to match monthly data grid
+        from scipy.ndimage import zoom
+        
+        # Calculate zoom factors
+        shape_ratio_y = monthly_data.shape[0] / water_masks["permanent"].shape[0]
+        shape_ratio_x = monthly_data.shape[1] / water_masks["permanent"].shape[1]
+        
+        # Resample masks to match monthly data shape
+        aligned_masks = {}
+        for key, mask in water_masks.items():
+            if isinstance(mask, np.ndarray):
+                if mask.ndim == 2:
+                    # Use nearest neighbor for masks
+                    aligned_masks[key] = zoom(
+                        mask.astype(float),
+                        (shape_ratio_y, shape_ratio_x),
+                        order=0
+                    ).astype(mask.dtype)
+                else:
+                    aligned_masks[key] = mask
+            else:
+                aligned_masks[key] = mask
+        water_masks = aligned_masks
+    
     # Basic area calculations
     water_mask = np.isin(monthly_data, list(WATER_CLASSES))
     high_conf_mask = np.isin(monthly_data, list(HIGH_CONF_WATER))
